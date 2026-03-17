@@ -21,18 +21,35 @@ validators:
   - id: tests
     name: Tests
     type: shell
-    command: "npm test"
+    command: "CGO_ENABLED=1 go test ./..."
     on_fail: reject    # Block acceptance if tests fail
     timeout: 120s
 
-  # Run the linter (non-blocking)
-  - id: lint
-    name: Lint
+  # Run go vet (non-blocking)
+  - id: vet
+    name: Vet
     type: shell
-    command: "npm run lint"
+    command: "go vet ./..."
     on_fail: warn      # Report but don't block
     timeout: 30s
     parallel: true     # Can run concurrently with other parallel validators
+
+  # Run golangci-lint (non-blocking)
+  - id: lint
+    name: Lint
+    type: shell
+    command: "golangci-lint run"
+    on_fail: warn
+    timeout: 60s
+    parallel: true
+
+  # Verify the project builds
+  - id: build
+    name: Build
+    type: shell
+    command: "CGO_ENABLED=1 go build ./..."
+    on_fail: reject
+    timeout: 60s
 
   # Claude-powered code quality review (blind validation)
   - id: pr-review
@@ -75,18 +92,22 @@ validators:
 # Profiles: named sets of validator IDs
 profiles:
   default:
+    - build
     - tests
     - pr-review
     - commit
 
   strict:
+    - build
     - tests
+    - vet
     - lint
     - security
     - pr-review
     - commit
 
   quick:
+    - build
     - tests
     - commit
 
