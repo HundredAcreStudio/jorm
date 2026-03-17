@@ -21,6 +21,7 @@ type RunOptions struct {
 	Prompt   string
 	WorkDir  string
 	Model    string
+	Env      []string          // environment for subprocess; nil uses os.Environ()
 	OnOutput func(text string) // called for each meaningful output line; nil-safe
 }
 
@@ -64,6 +65,9 @@ func RunClaude(ctx context.Context, opts RunOptions) (*ClaudeResult, error) {
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = opts.WorkDir
+	if opts.Env != nil {
+		cmd.Env = opts.Env
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

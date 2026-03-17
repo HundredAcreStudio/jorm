@@ -41,6 +41,9 @@ type model struct {
 	// State
 	done     bool
 	finalErr error
+
+	// Summary (collected for post-TUI display)
+	phases []string
 }
 
 func newModel(profile, modelName string, validatorNames []string) model {
@@ -92,6 +95,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PhaseMsg:
 		m.phase = msg.Name
+		m.phases = append(m.phases, msg.Name)
 
 	case IssueLoadedMsg:
 		m.issueTitle = msg.Title

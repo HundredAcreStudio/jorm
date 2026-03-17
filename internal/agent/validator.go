@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/jorm/internal/agent/prompts"
 	"github.com/jorm/internal/config"
 )
 
@@ -25,7 +26,7 @@ func (r ValidatorResult) IsBlocker() bool {
 
 // Validator is the interface all validators implement.
 type Validator interface {
-	Validate(ctx context.Context, diff, workDir string) ValidatorResult
+	Validate(ctx context.Context, diff, workDir, repoDir string) ValidatorResult
 	Cfg() config.ValidatorConfig
 }
 
@@ -36,7 +37,7 @@ type ShellValidator struct {
 
 func (v *ShellValidator) Cfg() config.ValidatorConfig { return v.Config }
 
-func (v *ShellValidator) Validate(ctx context.Context, diff, workDir string) ValidatorResult {
+func (v *ShellValidator) Validate(ctx context.Context, diff, workDir, repoDir string) ValidatorResult {
 	if v.Config.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, v.Config.Timeout)
@@ -58,21 +59,33 @@ func (v *ShellValidator) Validate(ctx context.Context, diff, workDir string) Val
 	}
 }
 
-// ClaudeValidator runs a Claude review with fresh context (blind validation).
-type ClaudeValidator struct {
+// ClaudeReviewValidator runs a Claude review with fresh context (blind validation).
+// Injects the diff into the prompt and looks for VERDICT: ACCEPT.
+type ClaudeReviewValidator struct {
 	Config config.ValidatorConfig
 }
 
-func (v *ClaudeValidator) Cfg() config.ValidatorConfig { return v.Config }
+func (v *ClaudeReviewValidator) Cfg() config.ValidatorConfig { return v.Config }
 
-func (v *ClaudeValidator) Validate(ctx context.Context, diff, workDir string) ValidatorResult {
+func (v *ClaudeReviewValidator) Validate(ctx context.Context, diff, workDir, repoDir string) ValidatorResult {
 	if v.Config.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, v.Config.Timeout)
 		defer cancel()
 	}
 
-	prompt := fmt.Sprintf("%s\n\n## Diff to review\n\n```diff\n%s\n```\n\nEnd your response with exactly \"VERDICT: ACCEPT\" or \"VERDICT: REJECT\" followed by a brief reason.", v.Config.Prompt, diff)
+	promptText, err := prompts.Resolve(v.Config.Prompt, repoDir)
+	if err != nil {
+		return ValidatorResult{
+			ValidatorID: v.Config.ID,
+			Name:        v.Config.Name,
+			Passed:      false,
+			OnFail:      v.Config.OnFail,
+			Output:      fmt.Sprintf("prompt error: %v", err),
+		}
+	}
+
+	prompt := fmt.Sprintf("%s\n\n## Diff to review\n\n```diff\n%s\n```\n\nEnd your response with exactly \"VERDICT: ACCEPT\" or \"VERDICT: REJECT\" followed by a brief reason.", promptText, diff)
 
 	result, err := RunClaude(ctx, RunOptions{
 		Prompt:  prompt,
@@ -100,6 +113,56 @@ func (v *ClaudeValidator) Validate(ctx context.Context, diff, workDir string) Va
 	}
 }
 
+// ClaudeActionValidator runs Claude with full tool access in the worktree.
+// Passes if Claude exits cleanly (no VERDICT needed).
+type ClaudeActionValidator struct {
+	Config config.ValidatorConfig
+}
+
+func (v *ClaudeActionValidator) Cfg() config.ValidatorConfig { return v.Config }
+
+func (v *ClaudeActionValidator) Validate(ctx context.Context, diff, workDir, repoDir string) ValidatorResult {
+	if v.Config.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, v.Config.Timeout)
+		defer cancel()
+	}
+
+	promptText, err := prompts.Resolve(v.Config.Prompt, repoDir)
+	if err != nil {
+		return ValidatorResult{
+			ValidatorID: v.Config.ID,
+			Name:        v.Config.Name,
+			Passed:      false,
+			OnFail:      v.Config.OnFail,
+			Output:      fmt.Sprintf("prompt error: %v", err),
+		}
+	}
+
+	result, err := RunClaude(ctx, RunOptions{
+		Prompt:  promptText,
+		WorkDir: workDir,
+		Model:   "sonnet",
+	})
+	if err != nil {
+		return ValidatorResult{
+			ValidatorID: v.Config.ID,
+			Name:        v.Config.Name,
+			Passed:      false,
+			OnFail:      v.Config.OnFail,
+			Output:      fmt.Sprintf("claude error: %v", err),
+		}
+	}
+
+	return ValidatorResult{
+		ValidatorID: v.Config.ID,
+		Name:        v.Config.Name,
+		Passed:      true,
+		OnFail:      v.Config.OnFail,
+		Output:      result.Text,
+	}
+}
+
 // BuildValidators constructs validators from a config slice.
 func BuildValidators(configs []config.ValidatorConfig) ([]Validator, error) {
 	validators := make([]Validator, 0, len(configs))
@@ -108,7 +171,11 @@ func BuildValidators(configs []config.ValidatorConfig) ([]Validator, error) {
 		case "shell":
 			validators = append(validators, &ShellValidator{Config: cfg})
 		case "claude":
-			validators = append(validators, &ClaudeValidator{Config: cfg})
+			if cfg.Mode == "action" {
+				validators = append(validators, &ClaudeActionValidator{Config: cfg})
+			} else {
+				validators = append(validators, &ClaudeReviewValidator{Config: cfg})
+			}
 		default:
 			return nil, fmt.Errorf("unknown validator type %q for %q", cfg.Type, cfg.ID)
 		}

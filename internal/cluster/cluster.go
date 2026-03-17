@@ -72,6 +72,7 @@ func (c *Cluster) Run(ctx context.Context, iss *issue.Issue) error {
 			Prompt:  prompt,
 			WorkDir: c.worktree.Dir,
 			Model:   c.cfg.Model,
+			Env:     c.cfg.SubprocessEnv(),
 			OnOutput: func(text string) {
 				c.sink.ClaudeOutput(text)
 			},
@@ -124,7 +125,7 @@ func (c *Cluster) RunAcceptOnlyValidators(ctx context.Context) error {
 	for _, v := range c.acceptOnly {
 		vcfg := v.Cfg()
 		c.sink.ValidatorStart(vcfg.ID, vcfg.Name)
-		result := v.Validate(ctx, diff, c.worktree.Dir)
+		result := v.Validate(ctx, diff, c.worktree.Dir, c.worktree.RepoDir)
 		c.sink.ValidatorDone(result)
 		if result.IsBlocker() {
 			return fmt.Errorf("accept-only validator %q failed: %s", result.Name, result.Output)
@@ -148,7 +149,7 @@ func (c *Cluster) runValidators(ctx context.Context, diff string) []agent.Valida
 			c.sink.ValidatorStart(vcfg.ID, vcfg.Name)
 			go func(v agent.Validator) {
 				defer wg.Done()
-				result := v.Validate(ctx, diff, c.worktree.Dir)
+				result := v.Validate(ctx, diff, c.worktree.Dir, c.worktree.RepoDir)
 				c.sink.ValidatorDone(result)
 				ch <- result
 			}(v)
@@ -166,7 +167,7 @@ func (c *Cluster) runValidators(ctx context.Context, diff string) []agent.Valida
 	for _, v := range c.sequential {
 		vcfg := v.Cfg()
 		c.sink.ValidatorStart(vcfg.ID, vcfg.Name)
-		r := v.Validate(ctx, diff, c.worktree.Dir)
+		r := v.Validate(ctx, diff, c.worktree.Dir, c.worktree.RepoDir)
 		c.sink.ValidatorDone(r)
 		results = append(results, r)
 		if r.IsBlocker() {

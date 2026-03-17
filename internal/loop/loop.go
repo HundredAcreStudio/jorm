@@ -63,7 +63,7 @@ func Run(ctx context.Context, opts Options) error {
 		sink.IssueLoaded(iss.Title, "")
 	} else {
 		sink.Phase("Fetching issue...")
-		provider, err := issue.NewProvider(cfg.IssueProvider.Type, cfg.IssueProvider.TokenEnv)
+		provider, err := issue.NewProvider(cfg.IssueProvider, cfg.ProviderToken(cfg.IssueProvider))
 		if err != nil {
 			return fmt.Errorf("creating issue provider: %w", err)
 		}
@@ -105,6 +105,9 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("saving run state: %w", err)
 	}
 
+	// Build env with issue context
+	subEnv := issueEnv(cfg.SubprocessEnv(), iss)
+
 	// Run cluster
 	cl, err := cluster.New(cfg, profile, wt, sink)
 	if err != nil {
@@ -114,7 +117,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err := cl.Run(ctx, iss); err != nil {
 		runState.Status = "rejected"
 		st.Save(runState)
-		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir)
+		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
 		hookRunner.OnFailure(ctx)
 		return err
 	}
@@ -129,7 +132,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Run hooks
 	sink.Phase("Running completion hooks...")
-	hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir)
+	hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
 	if err := hookRunner.OnComplete(ctx); err != nil {
 		sink.Phase(fmt.Sprintf("Hook failed: %s", err))
 	}
@@ -137,6 +140,18 @@ func Run(ctx context.Context, opts Options) error {
 	runState.Status = "accepted"
 	st.Save(runState)
 	return nil
+}
+
+// issueEnv appends issue context env vars to the base env.
+func issueEnv(base []string, iss *issue.Issue) []string {
+	env := make([]string, len(base), len(base)+3)
+	copy(env, base)
+	env = append(env, "JORM_ISSUE_ID="+iss.ID)
+	env = append(env, "JORM_ISSUE_TITLE="+iss.Title)
+	if iss.URL != "" {
+		env = append(env, "JORM_ISSUE_URL="+iss.URL)
+	}
+	return env
 }
 
 func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile string, opts Options, sink events.Sink) error {
@@ -161,7 +176,7 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile st
 			Body:  opts.Body,
 		}
 	} else {
-		provider, err := issue.NewProvider(cfg.IssueProvider.Type, cfg.IssueProvider.TokenEnv)
+		provider, err := issue.NewProvider(cfg.IssueProvider, cfg.ProviderToken(cfg.IssueProvider))
 		if err != nil {
 			return fmt.Errorf("creating issue provider: %w", err)
 		}
@@ -171,6 +186,8 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile st
 		}
 	}
 	sink.IssueLoaded(iss.Title, iss.URL)
+
+	subEnv := issueEnv(cfg.SubprocessEnv(), iss)
 
 	runState.Status = "running"
 	st.Save(runState)
@@ -194,7 +211,7 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile st
 	}
 
 	sink.Phase("Running completion hooks...")
-	hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir)
+	hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
 	if err := hookRunner.OnComplete(ctx); err != nil {
 		sink.Phase(fmt.Sprintf("Hook failed: %s", err))
 	}

@@ -2,10 +2,19 @@ package tui
 
 import (
 	"context"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/fatih/color"
 	"github.com/jorm/internal/config"
 	"github.com/jorm/internal/loop"
+)
+
+var (
+	rBold  = color.New(color.Bold).SprintFunc()
+	rGreen = color.New(color.FgGreen).SprintFunc()
+	rRed   = color.New(color.FgRed).SprintFunc()
+	rCyan  = color.New(color.FgCyan).SprintFunc()
 )
 
 // Run starts the bubbletea TUI and runs the loop in a background goroutine.
@@ -48,5 +57,67 @@ func Run(ctx context.Context, opts loop.Options) error {
 	}
 
 	fm := finalModel.(model)
+
+	// Print summary after alt-screen clears
+	printSummary(fm)
+
 	return fm.finalErr
+}
+
+func printSummary(m model) {
+	fmt.Println()
+	if m.issueTitle != "" {
+		fmt.Printf("  %s %s\n", rBold("Issue:"), m.issueTitle)
+	}
+	if m.attempt > 0 {
+		fmt.Printf("  %s %d  %s %s  %s %s\n",
+			rBold("Attempts:"), m.attempt,
+			rBold("Profile:"), m.profile,
+			rBold("Model:"), m.modelName)
+	}
+
+	// Validator results
+	if len(m.validators) > 0 {
+		fmt.Printf("  %s ", rBold("Validators:"))
+		for _, v := range m.validators {
+			switch v.status {
+			case "pass":
+				fmt.Printf("%s %s  ", rGreen("✓"), v.name)
+			case "fail":
+				fmt.Printf("%s %s  ", rRed("✗"), v.name)
+			default:
+				fmt.Printf("○ %s  ", v.name)
+			}
+		}
+		fmt.Println()
+	}
+
+	// Key phases (worktree location, hooks, results)
+	for _, phase := range m.phases {
+		if containsAny(phase, "Worktree kept", "Branch ", "Hook", "failed", "Failed", "push", "pr create", "✓") {
+			fmt.Printf("  %s %s\n", rCyan("→"), phase)
+		}
+	}
+
+	// Final status
+	fmt.Println()
+	if m.finalErr != nil {
+		fmt.Printf("  %s %s\n", rRed("✗ Failed:"), m.finalErr)
+	} else {
+		fmt.Printf("  %s\n", rGreen("✓ Completed successfully!"))
+	}
+	fmt.Println()
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if len(s) >= len(sub) {
+			for i := 0; i <= len(s)-len(sub); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

@@ -16,14 +16,13 @@ type Provider interface {
 }
 
 // NewProvider creates a provider based on the type string.
-// tokenEnv is an optional env var name override for the auth token.
-func NewProvider(providerType, tokenEnv string) (Provider, error) {
+func NewProvider(providerType, token string) (Provider, error) {
 	switch providerType {
 	case "github":
-		return NewGitHubProvider(tokenEnv)
+		return NewGitHubProvider(token)
 	case "linear":
 		return NewLinearProvider()
 	default:
-		return NewGitHubProvider(tokenEnv)
+		return NewGitHubProvider(token)
 	}
 }

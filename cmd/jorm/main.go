@@ -29,7 +29,7 @@ func main() {
 		Short: "Autonomous dev loop harness powered by Claude Code",
 	}
 
-	root.PersistentFlags().StringVar(&configPath, "config", ".dev-loop.yaml", "path to config file")
+	root.PersistentFlags().StringVar(&configPath, "config", ".jorm/config.yaml", "path to config file")
 	root.PersistentFlags().StringVar(&repoDir, "repo", ".", "path to git repository")
 	root.PersistentFlags().StringVar(&profile, "profile", "", "validator profile to use")
 	root.PersistentFlags().BoolVar(&noTUI, "no-tui", false, "disable TUI, use plain text output")
