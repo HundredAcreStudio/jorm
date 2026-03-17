@@ -4,22 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/fatih/color"
-
 	"github.com/jorm/internal/cluster"
 	"github.com/jorm/internal/config"
+	"github.com/jorm/internal/events"
 	gitpkg "github.com/jorm/internal/git"
 	"github.com/jorm/internal/hooks"
 	"github.com/jorm/internal/issue"
 	"github.com/jorm/internal/store"
-)
-
-var (
-	bold   = color.New(color.Bold).SprintFunc()
-	green  = color.New(color.FgGreen).SprintFunc()
-	red    = color.New(color.FgRed).SprintFunc()
-	yellow = color.New(color.FgYellow).SprintFunc()
-	cyan   = color.New(color.FgCyan).SprintFunc()
 )
 
 // Options configures a loop run.
@@ -28,11 +19,19 @@ type Options struct {
 	RepoDir    string
 	Profile    string
 	IssueID    string
+	Title      string
+	Body       string
 	Resume     bool
+	Sink       events.Sink
 }
 
 // Run orchestrates the full jorm lifecycle.
 func Run(ctx context.Context, opts Options) error {
+	sink := opts.Sink
+	if sink == nil {
+		sink = &events.PrintSink{}
+	}
+
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil {
 		return err
@@ -50,38 +49,47 @@ func Run(ctx context.Context, opts Options) error {
 	defer st.Close()
 
 	if opts.Resume {
-		return resume(ctx, cfg, st, profile, opts)
+		return resume(ctx, cfg, st, profile, opts, sink)
 	}
 
 	// Fetch issue
-	provider, err := issue.NewProvider(cfg.IssueProvider.Type)
-	if err != nil {
-		return fmt.Errorf("creating issue provider: %w", err)
+	var iss *issue.Issue
+	if opts.Title != "" {
+		iss = &issue.Issue{
+			ID:    opts.IssueID,
+			Title: opts.Title,
+			Body:  opts.Body,
+		}
+		sink.IssueLoaded(iss.Title, "")
+	} else {
+		sink.Phase("Fetching issue...")
+		provider, err := issue.NewProvider(cfg.IssueProvider.Type)
+		if err != nil {
+			return fmt.Errorf("creating issue provider: %w", err)
+		}
+		iss, err = provider.Fetch(ctx, opts.IssueID)
+		if err != nil {
+			return fmt.Errorf("fetching issue: %w", err)
+		}
+		sink.IssueLoaded(iss.Title, iss.URL)
 	}
-
-	fmt.Printf("%s Fetching issue %s...\n", cyan("→"), bold(opts.IssueID))
-	iss, err := provider.Fetch(ctx, opts.IssueID)
-	if err != nil {
-		return fmt.Errorf("fetching issue: %w", err)
-	}
-	fmt.Printf("%s %s\n", green("✓"), iss.Title)
 
 	// Create worktree
-	fmt.Printf("%s Creating worktree...\n", cyan("→"))
+	sink.Phase("Creating worktree...")
 	wt, err := gitpkg.CreateWorktree(opts.RepoDir, opts.IssueID)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s Branch %s at %s\n", green("✓"), bold(wt.Branch), wt.Dir)
+	sink.Phase(fmt.Sprintf("Branch %s at %s", wt.Branch, wt.Dir))
 
 	// Defer cleanup only if no changes
 	defer func() {
 		hasChanges, _ := wt.HasChanges()
 		if !hasChanges {
-			fmt.Printf("%s Cleaning up worktree (no changes)...\n", yellow("→"))
+			sink.Phase("Cleaning up worktree (no changes)...")
 			wt.Cleanup()
 		} else {
-			fmt.Printf("%s Worktree kept at %s\n", cyan("ℹ"), wt.Dir)
+			sink.Phase(fmt.Sprintf("Worktree kept at %s", wt.Dir))
 		}
 	}()
 
@@ -98,8 +106,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	// Run cluster
-	fmt.Printf("%s Starting dev loop (profile: %s, max attempts: %d)...\n", cyan("→"), bold(profile), cfg.MaxAttempts)
-	cl, err := cluster.New(cfg, profile, wt)
+	cl, err := cluster.New(cfg, profile, wt, sink)
 	if err != nil {
 		return err
 	}
@@ -109,34 +116,31 @@ func Run(ctx context.Context, opts Options) error {
 		st.Save(runState)
 		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir)
 		hookRunner.OnFailure(ctx)
-		fmt.Printf("%s %s\n", red("✗"), err)
 		return err
 	}
 
 	// Run accept-only validators
-	fmt.Printf("%s Running post-accept validators...\n", cyan("→"))
+	sink.Phase("Running post-accept validators...")
 	if err := cl.RunAcceptOnlyValidators(ctx); err != nil {
 		runState.Status = "failed"
 		st.Save(runState)
-		fmt.Printf("%s %s\n", red("✗"), err)
 		return err
 	}
 
 	// Run hooks
-	fmt.Printf("%s Running completion hooks...\n", cyan("→"))
+	sink.Phase("Running completion hooks...")
 	hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir)
 	if err := hookRunner.OnComplete(ctx); err != nil {
-		fmt.Printf("%s Hook failed: %s\n", yellow("⚠"), err)
+		sink.Phase(fmt.Sprintf("Hook failed: %s", err))
 	}
 
 	runState.Status = "accepted"
 	st.Save(runState)
-	fmt.Printf("%s Issue %s completed successfully!\n", green("✓"), bold(opts.IssueID))
 	return nil
 }
 
-func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile string, opts Options) error {
-	fmt.Printf("%s Resuming issue %s...\n", cyan("→"), bold(opts.IssueID))
+func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile string, opts Options, sink events.Sink) error {
+	sink.Phase("Resuming...")
 
 	runState, err := st.LoadByIssue(opts.IssueID)
 	if err != nil {
@@ -149,20 +153,29 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile st
 		RepoDir: opts.RepoDir,
 	}
 
-	provider, err := issue.NewProvider(cfg.IssueProvider.Type)
-	if err != nil {
-		return fmt.Errorf("creating issue provider: %w", err)
+	var iss *issue.Issue
+	if opts.Title != "" {
+		iss = &issue.Issue{
+			ID:    opts.IssueID,
+			Title: opts.Title,
+			Body:  opts.Body,
+		}
+	} else {
+		provider, err := issue.NewProvider(cfg.IssueProvider.Type)
+		if err != nil {
+			return fmt.Errorf("creating issue provider: %w", err)
+		}
+		iss, err = provider.Fetch(ctx, opts.IssueID)
+		if err != nil {
+			return fmt.Errorf("fetching issue: %w", err)
+		}
 	}
-
-	iss, err := provider.Fetch(ctx, opts.IssueID)
-	if err != nil {
-		return fmt.Errorf("fetching issue: %w", err)
-	}
+	sink.IssueLoaded(iss.Title, iss.URL)
 
 	runState.Status = "running"
 	st.Save(runState)
 
-	cl, err := cluster.New(cfg, profile, wt)
+	cl, err := cluster.New(cfg, profile, wt, sink)
 	if err != nil {
 		return err
 	}
@@ -170,25 +183,23 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile st
 	if err := cl.Run(ctx, iss); err != nil {
 		runState.Status = "rejected"
 		st.Save(runState)
-		fmt.Printf("%s %s\n", red("✗"), err)
 		return err
 	}
 
-	fmt.Printf("%s Running post-accept validators...\n", cyan("→"))
+	sink.Phase("Running post-accept validators...")
 	if err := cl.RunAcceptOnlyValidators(ctx); err != nil {
 		runState.Status = "failed"
 		st.Save(runState)
 		return err
 	}
 
-	fmt.Printf("%s Running completion hooks...\n", cyan("→"))
+	sink.Phase("Running completion hooks...")
 	hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir)
 	if err := hookRunner.OnComplete(ctx); err != nil {
-		fmt.Printf("%s Hook failed: %s\n", yellow("⚠"), err)
+		sink.Phase(fmt.Sprintf("Hook failed: %s", err))
 	}
 
 	runState.Status = "accepted"
 	st.Save(runState)
-	fmt.Printf("%s Issue %s resumed and completed!\n", green("✓"), bold(opts.IssueID))
 	return nil
 }

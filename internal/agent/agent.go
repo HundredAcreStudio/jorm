@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,34 +16,62 @@ type ClaudeResult struct {
 	Cost float64
 }
 
-// streamMessage represents a single JSON message from claude --output-format stream-json.
+// RunOptions configures a RunClaude invocation.
+type RunOptions struct {
+	Prompt   string
+	WorkDir  string
+	Model    string
+	OnOutput func(text string) // called for each meaningful output line; nil-safe
+}
+
+// streamLine is the top-level JSON object from claude --output-format stream-json.
+type streamLine struct {
+	Type    string          `json:"type"`
+	Message *streamMessage  `json:"message"`
+	Result  json.RawMessage `json:"result"`
+	CostUSD float64        `json:"cost_usd"`
+}
+
+// streamMessage is the nested message object within assistant lines.
 type streamMessage struct {
-	Type    string  `json:"type"`
-	Content string  `json:"content"`
-	Role    string  `json:"role"`
-	CostUSD float64 `json:"cost_usd"`
+	Role       string         `json:"role"`
+	Content    []contentBlock `json:"content"`
+	StopReason *string        `json:"stop_reason"`
+}
+
+// contentBlock represents one block in the content array.
+type contentBlock struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	Thinking string          `json:"thinking"`
+	Name     string          `json:"name"`
+	Input    json.RawMessage `json:"input"`
 }
 
 // RunClaude runs the Claude CLI headlessly and returns the final assistant text and cost.
-func RunClaude(ctx context.Context, prompt, workDir, model string) (*ClaudeResult, error) {
-	resolved := resolveModel(model)
+func RunClaude(ctx context.Context, opts RunOptions) (*ClaudeResult, error) {
+	resolved := resolveModel(opts.Model)
 
 	args := []string{
 		"--print",
+		"--verbose",
 		"--output-format", "stream-json",
 		"--allowedTools", "Bash,Read,Write,Edit,MultiEdit,Glob,Grep",
 		"--max-turns", "30",
 		"--model", resolved,
-		"-p", prompt,
+		"-p", opts.Prompt,
 	}
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
-	cmd.Dir = workDir
+	cmd.Dir = opts.WorkDir
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting claude: %w", err)
@@ -55,32 +84,152 @@ func RunClaude(ctx context.Context, prompt, workDir, model string) (*ClaudeResul
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
 	for scanner.Scan() {
-		var msg streamMessage
-		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+		line := scanner.Bytes()
+
+		var sl streamLine
+		if err := json.Unmarshal(line, &sl); err != nil {
+			if opts.OnOutput != nil {
+				opts.OnOutput(string(line))
+			}
 			continue
 		}
-		switch msg.Type {
+
+		// Stream output to callback
+		if opts.OnOutput != nil {
+			for _, display := range formatStreamLine(sl) {
+				opts.OnOutput(display)
+			}
+		}
+
+		// Accumulate final result text
+		switch sl.Type {
 		case "assistant":
-			if msg.Content != "" {
-				text.WriteString(msg.Content)
+			if sl.Message != nil {
+				for _, block := range sl.Message.Content {
+					if block.Type == "text" {
+						text.WriteString(block.Text)
+					}
+				}
 			}
 		case "result":
-			if msg.Content != "" {
-				text.Reset()
-				text.WriteString(msg.Content)
+			// Result may contain the final text
+			var resultObj struct {
+				Result string  `json:"result"`
+				CostUSD float64 `json:"cost_usd"`
 			}
-			totalCost = msg.CostUSD
+			if json.Unmarshal(line, &resultObj) == nil {
+				if resultObj.Result != "" {
+					text.Reset()
+					text.WriteString(resultObj.Result)
+				}
+				if resultObj.CostUSD > 0 {
+					totalCost = resultObj.CostUSD
+				}
+			}
 		}
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("claude exited with error: %w", err)
+		return nil, fmt.Errorf("claude exited with error: %w\nstderr: %s", err, stderr.String())
 	}
 
 	return &ClaudeResult{
 		Text: text.String(),
 		Cost: totalCost,
 	}, nil
+}
+
+// formatStreamLine produces human-readable lines from a stream-json line.
+func formatStreamLine(sl streamLine) []string {
+	switch sl.Type {
+	case "system":
+		return []string{"[system] initializing..."}
+
+	case "assistant":
+		if sl.Message == nil {
+			return nil
+		}
+		var lines []string
+		for _, block := range sl.Message.Content {
+			switch block.Type {
+			case "thinking":
+				if block.Thinking != "" {
+					t := block.Thinking
+					if len(t) > 200 {
+						t = t[:200] + "..."
+					}
+					lines = append(lines, fmt.Sprintf("💭 %s", t))
+				}
+			case "text":
+				if block.Text != "" {
+					t := block.Text
+					if len(t) > 200 {
+						t = t[:200] + "..."
+					}
+					lines = append(lines, t)
+				}
+			case "tool_use":
+				lines = append(lines, formatToolUse(block))
+			}
+		}
+		return lines
+
+	case "tool_result", "user":
+		// tool results / user turns — skip (they're verbose)
+		return nil
+
+	case "rate_limit_event":
+		return []string{"⏳ rate limited, waiting..."}
+
+	case "result":
+		if sl.CostUSD > 0 {
+			return []string{fmt.Sprintf("✓ Done (cost: $%.4f)", sl.CostUSD)}
+		}
+		return []string{"✓ Done"}
+	}
+
+	return nil
+}
+
+// formatToolUse produces a readable summary of a tool call.
+func formatToolUse(block contentBlock) string {
+	var input map[string]any
+	if json.Unmarshal(block.Input, &input) != nil {
+		return fmt.Sprintf("→ %s", block.Name)
+	}
+
+	// Show the most relevant input field per tool
+	switch block.Name {
+	case "Bash":
+		if cmd, ok := input["command"].(string); ok {
+			if len(cmd) > 100 {
+				cmd = cmd[:100] + "..."
+			}
+			return fmt.Sprintf("→ Bash: %s", cmd)
+		}
+	case "Read":
+		if path, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("→ Read: %s", path)
+		}
+	case "Write":
+		if path, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("→ Write: %s", path)
+		}
+	case "Edit", "MultiEdit":
+		if path, ok := input["file_path"].(string); ok {
+			return fmt.Sprintf("→ Edit: %s", path)
+		}
+	case "Glob":
+		if pattern, ok := input["pattern"].(string); ok {
+			return fmt.Sprintf("→ Glob: %s", pattern)
+		}
+	case "Grep":
+		if pattern, ok := input["pattern"].(string); ok {
+			return fmt.Sprintf("→ Grep: %s", pattern)
+		}
+	}
+
+	return fmt.Sprintf("→ %s", block.Name)
 }
 
 func resolveModel(alias string) string {

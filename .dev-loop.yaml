@@ -1,8 +1,8 @@
 # jorm configuration
 # See README.md for full documentation
 
-# Maximum retry attempts before giving up
-max_attempts: 5
+# Maximum retry attempts (0 = unlimited, runs until accepted or cancelled)
+max_attempts: 0
 
 # Default Claude model for the worker agent
 # Options: sonnet, opus, haiku, or a full model ID

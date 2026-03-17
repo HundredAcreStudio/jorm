@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"text/tabwriter"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 
 	"github.com/jorm/internal/loop"
 	"github.com/jorm/internal/store"
+	"github.com/jorm/internal/tui"
 )
 
 func main() {
@@ -18,6 +21,7 @@ func main() {
 		configPath string
 		repoDir    string
 		profile    string
+		noTUI      bool
 	)
 
 	root := &cobra.Command{
@@ -28,18 +32,34 @@ func main() {
 	root.PersistentFlags().StringVar(&configPath, "config", ".dev-loop.yaml", "path to config file")
 	root.PersistentFlags().StringVar(&repoDir, "repo", ".", "path to git repository")
 	root.PersistentFlags().StringVar(&profile, "profile", "", "validator profile to use")
+	root.PersistentFlags().BoolVar(&noTUI, "no-tui", false, "disable TUI, use plain text output")
 
 	runCmd := &cobra.Command{
-		Use:   "run <issue-id>",
-		Short: "Run the dev loop for an issue",
+		Use:   "run <issue-id or prompt>",
+		Short: "Run the dev loop for an issue ID or freeform prompt",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return loop.Run(context.Background(), loop.Options{
+			arg := args[0]
+			opts := loop.Options{
 				ConfigPath: configPath,
 				RepoDir:    repoDir,
 				Profile:    profile,
-				IssueID:    args[0],
-			})
+			}
+
+			// If the arg looks like a number, treat it as an issue ID
+			if isIssueID(arg) {
+				opts.IssueID = arg
+			} else {
+				// Freeform prompt
+				opts.IssueID = fmt.Sprintf("prompt-%d", time.Now().Unix())
+				opts.Title = arg
+				opts.Body = arg
+			}
+
+			if noTUI {
+				return loop.Run(context.Background(), opts)
+			}
+			return tui.Run(context.Background(), opts)
 		},
 	}
 
@@ -102,4 +122,9 @@ func main() {
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+func isIssueID(s string) bool {
+	_, err := strconv.Atoi(s)
+	return err == nil
 }

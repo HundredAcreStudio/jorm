@@ -8,6 +8,7 @@ import (
 
 	"github.com/jorm/internal/agent"
 	"github.com/jorm/internal/config"
+	"github.com/jorm/internal/events"
 	gitpkg "github.com/jorm/internal/git"
 	"github.com/jorm/internal/issue"
 )
@@ -17,13 +18,14 @@ type Cluster struct {
 	cfg        *config.Config
 	profile    string
 	worktree   *gitpkg.Worktree
+	sink       events.Sink
 	parallel   []agent.Validator
 	sequential []agent.Validator
 	acceptOnly []agent.Validator
 }
 
 // New builds a Cluster, splitting validators into parallel, sequential, and accept-only groups.
-func New(cfg *config.Config, profile string, worktree *gitpkg.Worktree) (*Cluster, error) {
+func New(cfg *config.Config, profile string, worktree *gitpkg.Worktree, sink events.Sink) (*Cluster, error) {
 	validators, err := cfg.ValidatorsForProfile(profile)
 	if err != nil {
 		return nil, err
@@ -38,6 +40,7 @@ func New(cfg *config.Config, profile string, worktree *gitpkg.Worktree) (*Cluste
 		cfg:      cfg,
 		profile:  profile,
 		worktree: worktree,
+		sink:     sink,
 	}
 
 	for _, v := range built {
@@ -59,10 +62,20 @@ func New(cfg *config.Config, profile string, worktree *gitpkg.Worktree) (*Cluste
 func (c *Cluster) Run(ctx context.Context, iss *issue.Issue) error {
 	var findings string
 
-	for attempt := 1; attempt <= c.cfg.MaxAttempts; attempt++ {
+	for attempt := 1; c.cfg.MaxAttempts == 0 || attempt <= c.cfg.MaxAttempts; attempt++ {
+		c.sink.Attempt(attempt, c.cfg.MaxAttempts)
+		c.sink.Phase("Running worker...")
+
 		prompt := c.buildWorkerPrompt(iss, findings)
 
-		_, err := agent.RunClaude(ctx, prompt, c.worktree.Dir, c.cfg.Model)
+		_, err := agent.RunClaude(ctx, agent.RunOptions{
+			Prompt:  prompt,
+			WorkDir: c.worktree.Dir,
+			Model:   c.cfg.Model,
+			OnOutput: func(text string) {
+				c.sink.ClaudeOutput(text)
+			},
+		})
 		if err != nil {
 			return fmt.Errorf("worker attempt %d: %w", attempt, err)
 		}
@@ -77,6 +90,7 @@ func (c *Cluster) Run(ctx context.Context, iss *issue.Issue) error {
 			continue
 		}
 
+		c.sink.Phase("Running validators...")
 		results := c.runValidators(ctx, diff)
 
 		var rejected bool
@@ -108,7 +122,10 @@ func (c *Cluster) RunAcceptOnlyValidators(ctx context.Context) error {
 	}
 
 	for _, v := range c.acceptOnly {
+		vcfg := v.Cfg()
+		c.sink.ValidatorStart(vcfg.ID, vcfg.Name)
 		result := v.Validate(ctx, diff, c.worktree.Dir)
+		c.sink.ValidatorDone(result)
 		if result.IsBlocker() {
 			return fmt.Errorf("accept-only validator %q failed: %s", result.Name, result.Output)
 		}
@@ -127,9 +144,13 @@ func (c *Cluster) runValidators(ctx context.Context, diff string) []agent.Valida
 
 		for _, v := range c.parallel {
 			wg.Add(1)
+			vcfg := v.Cfg()
+			c.sink.ValidatorStart(vcfg.ID, vcfg.Name)
 			go func(v agent.Validator) {
 				defer wg.Done()
-				ch <- v.Validate(ctx, diff, c.worktree.Dir)
+				result := v.Validate(ctx, diff, c.worktree.Dir)
+				c.sink.ValidatorDone(result)
+				ch <- result
 			}(v)
 		}
 
@@ -143,7 +164,10 @@ func (c *Cluster) runValidators(ctx context.Context, diff string) []agent.Valida
 
 	// Run sequential validators; short-circuit on blocking reject
 	for _, v := range c.sequential {
+		vcfg := v.Cfg()
+		c.sink.ValidatorStart(vcfg.ID, vcfg.Name)
 		r := v.Validate(ctx, diff, c.worktree.Dir)
+		c.sink.ValidatorDone(r)
 		results = append(results, r)
 		if r.IsBlocker() {
 			break

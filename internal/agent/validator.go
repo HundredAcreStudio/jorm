@@ -74,7 +74,11 @@ func (v *ClaudeValidator) Validate(ctx context.Context, diff, workDir string) Va
 
 	prompt := fmt.Sprintf("%s\n\n## Diff to review\n\n```diff\n%s\n```\n\nEnd your response with exactly \"VERDICT: ACCEPT\" or \"VERDICT: REJECT\" followed by a brief reason.", v.Config.Prompt, diff)
 
-	result, err := RunClaude(ctx, prompt, workDir, "sonnet")
+	result, err := RunClaude(ctx, RunOptions{
+		Prompt:  prompt,
+		WorkDir: workDir,
+		Model:   "sonnet",
+	})
 	if err != nil {
 		return ValidatorResult{
 			ValidatorID: v.Config.ID,

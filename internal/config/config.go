@@ -61,7 +61,7 @@ func Load(path string) (*Config, error) {
 
 func applyDefaults(cfg *Config) {
 	if cfg.MaxAttempts == 0 {
-		cfg.MaxAttempts = 5
+		cfg.MaxAttempts = 0 // 0 means unlimited
 	}
 	if cfg.Model == "" {
 		cfg.Model = "sonnet"
