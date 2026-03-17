@@ -1,0 +1,18 @@
+services:
+  jorm:
+    build: .
+    volumes:
+      - .:/workspace
+      - ~/.config/gh:/root/.config/gh:ro
+      - ~/.claude:/root/.claude:ro
+      - ~/.gitconfig:/root/.gitconfig:ro
+      - ~/.ssh:/root/.ssh:ro
+      - jorm-store:/root/.jorm
+    environment:
+      - ANTHROPIC_API_KEY
+      - GITHUB_TOKEN
+      - LINEAR_API_KEY
+      - GITHUB_REPOSITORY
+
+volumes:
+  jorm-store:

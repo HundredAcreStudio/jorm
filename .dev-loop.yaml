@@ -1,0 +1,97 @@
+# jorm configuration
+# See README.md for full documentation
+
+# Maximum retry attempts before giving up
+max_attempts: 5
+
+# Default Claude model for the worker agent
+# Options: sonnet, opus, haiku, or a full model ID
+model: sonnet
+
+# Default validator profile
+profile: default
+
+# Issue provider configuration
+issue_provider:
+  type: github  # "github" or "linear"
+
+# Validator definitions
+validators:
+  # Run the project's test suite
+  - id: tests
+    name: Tests
+    type: shell
+    command: "npm test"
+    on_fail: reject    # Block acceptance if tests fail
+    timeout: 120s
+
+  # Run the linter (non-blocking)
+  - id: lint
+    name: Lint
+    type: shell
+    command: "npm run lint"
+    on_fail: warn      # Report but don't block
+    timeout: 30s
+    parallel: true     # Can run concurrently with other parallel validators
+
+  # Claude-powered code quality review (blind validation)
+  - id: pr-review
+    name: PR Review
+    type: claude
+    prompt: |
+      Review this diff for code quality issues. Check for:
+      - Logic errors or bugs
+      - Missing error handling
+      - Poor naming or unclear intent
+      - Performance issues
+      - Breaking changes to public APIs
+    on_fail: reject
+    timeout: 300s
+
+  # Claude-powered security review
+  - id: security
+    name: Security Review
+    type: claude
+    prompt: |
+      Review this diff for security vulnerabilities. Check for:
+      - Injection attacks (SQL, command, XSS)
+      - Hardcoded secrets or credentials
+      - Insecure cryptographic practices
+      - Authorization/authentication bypasses
+      - Unsafe deserialization
+    on_fail: warn
+    timeout: 120s
+    parallel: true
+
+  # Auto-commit via Claude (only runs after acceptance)
+  - id: commit
+    name: Commit
+    type: shell
+    command: "claude commit"
+    on_fail: reject
+    run_on: accept_only
+    timeout: 60s
+
+# Profiles: named sets of validator IDs
+profiles:
+  default:
+    - tests
+    - pr-review
+    - commit
+
+  strict:
+    - tests
+    - lint
+    - security
+    - pr-review
+    - commit
+
+  quick:
+    - tests
+    - commit
+
+# Hooks run after the loop completes
+hooks:
+  on_complete:
+    - "gh pr create --fill"
+  on_failure: []
