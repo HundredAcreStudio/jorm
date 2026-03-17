@@ -17,17 +17,13 @@ type GitHubProvider struct {
 	token string // may be empty if using gh CLI fallback
 }
 
-func NewGitHubProvider(tokenEnv string) (*GitHubProvider, error) {
+func NewGitHubProvider(token string) (*GitHubProvider, error) {
 	repo := inferRepo()
 	if repo == "" {
 		return nil, fmt.Errorf("could not determine GitHub repository (set GITHUB_REPOSITORY or ensure a GitHub git remote exists)")
 	}
 
-	// Check custom env var first, then standard fallbacks
-	var token string
-	if tokenEnv != "" {
-		token = os.Getenv(tokenEnv)
-	}
+	// Fall back to standard env vars if no token provided
 	if token == "" {
 		token = os.Getenv("GITHUB_TOKEN")
 	}
