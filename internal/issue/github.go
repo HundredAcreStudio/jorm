@@ -2,91 +2,144 @@ package issue
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
-
-	"github.com/google/go-github/v58/github"
-	"golang.org/x/oauth2"
 )
 
 // GitHubProvider fetches issues from the GitHub API.
 type GitHubProvider struct {
-	client *github.Client
-	owner  string
-	repo   string
+	repo  string // owner/repo
+	token string // may be empty if using gh CLI fallback
 }
 
-func NewGitHubProvider() (*GitHubProvider, error) {
-	token := os.Getenv("GITHUB_TOKEN")
+func NewGitHubProvider(tokenEnv string) (*GitHubProvider, error) {
+	repo := inferRepo()
+	if repo == "" {
+		return nil, fmt.Errorf("could not determine GitHub repository (set GITHUB_REPOSITORY or ensure a GitHub git remote exists)")
+	}
+
+	// Check custom env var first, then standard fallbacks
+	var token string
+	if tokenEnv != "" {
+		token = os.Getenv(tokenEnv)
+	}
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
 	if token == "" {
 		token = os.Getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
 	}
-	if token == "" {
-		return nil, fmt.Errorf("GITHUB_TOKEN or GITHUB_PERSONAL_ACCESS_TOKEN not set")
-	}
 
-	ghRepo := os.Getenv("GITHUB_REPOSITORY")
-	if ghRepo == "" {
-		var err error
-		ghRepo, err = inferRepoFromGit()
-		if err != nil {
-			return nil, fmt.Errorf("GITHUB_REPOSITORY not set and could not infer from git remote: %w", err)
-		}
-	}
-
-	parts := strings.SplitN(ghRepo, "/", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("could not parse owner/repo from %q", ghRepo)
-	}
-
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})
-	tc := oauth2.NewClient(context.Background(), ts)
-
-	return &GitHubProvider{
-		client: github.NewClient(tc),
-		owner:  parts[0],
-		repo:   parts[1],
-	}, nil
+	return &GitHubProvider{repo: repo, token: token}, nil
 }
 
 func (p *GitHubProvider) Fetch(ctx context.Context, id string) (*Issue, error) {
-	num, err := strconv.Atoi(id)
-	if err != nil {
-		return nil, fmt.Errorf("invalid GitHub issue number %q: %w", id, err)
+	if p.token != "" {
+		iss, err := p.fetchWithAPI(ctx, id)
+		if err == nil {
+			return iss, nil
+		}
+		// If API fails, try gh CLI as fallback
 	}
 
-	ghIssue, _, err := p.client.Issues.Get(ctx, p.owner, p.repo, num)
+	return p.fetchWithGH(ctx, id)
+}
+
+// fetchWithAPI uses the GitHub REST API directly.
+func (p *GitHubProvider) fetchWithAPI(ctx context.Context, id string) (*Issue, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/issues/%s", p.repo, id)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetching GitHub issue #%d: %w", num, err)
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+p.token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GitHub API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Number  int    `json:"number"`
+		Title   string `json:"title"`
+		Body    string `json:"body"`
+		HTMLURL string `json:"html_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
 	}
 
 	return &Issue{
 		ID:    id,
-		Title: ghIssue.GetTitle(),
-		Body:  ghIssue.GetBody(),
-		URL:   ghIssue.GetHTMLURL(),
+		Title: result.Title,
+		Body:  result.Body,
+		URL:   result.HTMLURL,
 	}, nil
 }
 
-// inferRepoFromGit parses owner/repo from the git remote URL.
-func inferRepoFromGit() (string, error) {
-	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+// fetchWithGH uses the gh CLI as a fallback.
+func (p *GitHubProvider) fetchWithGH(ctx context.Context, id string) (*Issue, error) {
+	cmd := exec.CommandContext(ctx, "gh", "issue", "view", id, "--repo", p.repo, "--json", "number,title,body,url")
+	out, err := cmd.Output()
 	if err != nil {
-		// Try "upstream" if "origin" doesn't exist
-		out, err = exec.Command("git", "remote", "get-url", "upstream").Output()
+		var stderr string
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr = string(exitErr.Stderr)
+		}
+		return nil, fmt.Errorf("gh issue view failed: %w\n%s", err, stderr)
+	}
+
+	var result struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+		Body   string `json:"body"`
+		URL    string `json:"url"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, fmt.Errorf("parsing gh output: %w", err)
+	}
+
+	return &Issue{
+		ID:    id,
+		Title: result.Title,
+		Body:  result.Body,
+		URL:   result.URL,
+	}, nil
+}
+
+// inferRepo determines owner/repo from GITHUB_REPOSITORY env var or git remote.
+func inferRepo() string {
+	if r := os.Getenv("GITHUB_REPOSITORY"); r != "" {
+		return r
+	}
+
+	for _, remote := range []string{"origin", "upstream"} {
+		out, err := exec.Command("git", "remote", "get-url", remote).Output()
 		if err != nil {
-			return "", fmt.Errorf("no origin or upstream remote found")
+			continue
+		}
+		if repo, err := parseGitHubRepo(strings.TrimSpace(string(out))); err == nil {
+			return repo
 		}
 	}
 
-	return parseGitHubRepo(strings.TrimSpace(string(out)))
+	return ""
 }
 
 // parseGitHubRepo extracts owner/repo from a GitHub remote URL.
-// Supports SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git).
 func parseGitHubRepo(remote string) (string, error) {
 	remote = strings.TrimSuffix(remote, ".git")
 

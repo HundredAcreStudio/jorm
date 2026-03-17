@@ -14,6 +14,7 @@ profile: default
 # Issue provider configuration
 issue_provider:
   type: github  # "github" or "linear"
+  token_env: HUNDRED_ACRE_STUDIO_GITHUB_TOKEN  # env var for auth token (falls back to GITHUB_TOKEN)
 
 # Validator definitions
 validators:
@@ -114,5 +115,6 @@ profiles:
 # Hooks run after the loop completes
 hooks:
   on_complete:
+    - "git push -u upstream HEAD"
     - "gh pr create --fill"
   on_failure: []

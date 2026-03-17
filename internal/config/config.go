@@ -36,7 +36,8 @@ type ClusterConfig struct {
 }
 
 type IssueProviderConfig struct {
-	Type string `yaml:"type"` // "github" or "linear"
+	Type     string `yaml:"type"`      // "github" or "linear"
+	TokenEnv string `yaml:"token_env"` // env var name for auth token (e.g. "MY_GITHUB_TOKEN")
 }
 
 type HooksConfig struct {

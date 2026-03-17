@@ -63,7 +63,7 @@ func Run(ctx context.Context, opts Options) error {
 		sink.IssueLoaded(iss.Title, "")
 	} else {
 		sink.Phase("Fetching issue...")
-		provider, err := issue.NewProvider(cfg.IssueProvider.Type)
+		provider, err := issue.NewProvider(cfg.IssueProvider.Type, cfg.IssueProvider.TokenEnv)
 		if err != nil {
 			return fmt.Errorf("creating issue provider: %w", err)
 		}
@@ -161,7 +161,7 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile st
 			Body:  opts.Body,
 		}
 	} else {
-		provider, err := issue.NewProvider(cfg.IssueProvider.Type)
+		provider, err := issue.NewProvider(cfg.IssueProvider.Type, cfg.IssueProvider.TokenEnv)
 		if err != nil {
 			return fmt.Errorf("creating issue provider: %w", err)
 		}

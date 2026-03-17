@@ -20,6 +20,13 @@ func CreateWorktree(repoDir, issueID string) (*Worktree, error) {
 	branch := fmt.Sprintf("jorm/issue-%s", issueID)
 	dir := filepath.Join(os.TempDir(), fmt.Sprintf("jorm-%s", issueID))
 
+	// Clean up stale worktree/branch from previous runs
+	exec.Command("git", "worktree", "remove", dir, "--force").Run()
+	exec.Command("git", "branch", "-D", branch).Run()
+
+	// Remove leftover temp dir if it exists
+	os.RemoveAll(dir)
+
 	cmd := exec.Command("git", "worktree", "add", "-b", branch, dir)
 	cmd.Dir = repoDir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -33,20 +40,57 @@ func CreateWorktree(repoDir, issueID string) (*Worktree, error) {
 	}, nil
 }
 
-// Diff returns the diff between the base branch and HEAD.
+// Diff returns the full diff of all changes (committed + uncommitted) relative to the base branch.
 func (w *Worktree) Diff() (string, error) {
 	base, err := w.baseBranch()
 	if err != nil {
 		return "", err
 	}
 
+	// Include both committed and uncommitted changes by diffing base against the working tree.
+	// First, get committed changes (base...HEAD)
 	cmd := exec.Command("git", "diff", base+"...HEAD")
 	cmd.Dir = w.Dir
-	out, err := cmd.Output()
+	committed, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("getting diff: %w", err)
+		return "", fmt.Errorf("getting committed diff: %w", err)
 	}
-	return string(out), nil
+
+	// Then, get uncommitted changes (staged + unstaged)
+	cmd = exec.Command("git", "diff", "HEAD")
+	cmd.Dir = w.Dir
+	uncommitted, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("getting uncommitted diff: %w", err)
+	}
+
+	// Also check for untracked files
+	cmd = exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	cmd.Dir = w.Dir
+	untracked, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("listing untracked files: %w", err)
+	}
+
+	// Build combined diff
+	var combined strings.Builder
+	combined.Write(committed)
+	combined.Write(uncommitted)
+
+	// For untracked files, generate a diff-like output
+	for _, f := range strings.Split(strings.TrimSpace(string(untracked)), "\n") {
+		if f == "" {
+			continue
+		}
+		cmd = exec.Command("git", "diff", "--no-index", "/dev/null", f)
+		cmd.Dir = w.Dir
+		out, _ := cmd.Output() // exit code 1 is expected for new files
+		if len(out) > 0 {
+			combined.Write(out)
+		}
+	}
+
+	return combined.String(), nil
 }
 
 // HasChanges returns true if there are uncommitted changes or commits ahead of base.
