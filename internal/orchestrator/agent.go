@@ -57,6 +57,9 @@ type AgentConfig struct {
 	// TriggerProcessor processes trigger messages directly without executing Claude or shell.
 	// Used with ExecutionMode "passthrough". Returns (data, shouldPublish).
 	TriggerProcessor func(msg bus.Message) (map[string]any, bool)
+	// ReviewMode when true appends the VERDICT instruction to the prompt automatically.
+	// Used for claude review validators so custom prompts don't need to include it.
+	ReviewMode bool
 }
 
 // Agent is a running instance of an AgentConfig.
@@ -200,6 +203,11 @@ func (a *Agent) Run(ctx context.Context) error {
 
 		if msg.Content != "" {
 			prompt = prompt + "\n\n## Context from " + msg.Topic + "\n\n" + msg.Content
+		}
+
+		// For review-mode validators, append the verdict instruction
+		if a.Config.ReviewMode {
+			prompt = prompt + "\n\nEnd your response with exactly \"VERDICT: ACCEPT\" or \"VERDICT: REJECT\" followed by a brief reason."
 		}
 
 		a.setState(StateExecuting)

@@ -223,6 +223,7 @@ func (o *Orchestrator) injectValidators(configs []AgentConfig) ([]AgentConfig, e
 				Name:          vCopy.Name,
 				Role:          "validator",
 				ExecutionMode: "claude",
+				ReviewMode:    vCopy.Mode != "action",
 				Triggers: []Trigger{
 					{Topic: bus.TopicImplementationReady, Predicate: "always"},
 				},
