@@ -128,27 +128,28 @@ func (o *Orchestrator) Run(ctx context.Context, iss *issue.Issue, clusterID stri
 	o.sink.MessagePublished(bus.TopicIssueOpened, "orchestrator")
 
 	// Wait for CLUSTER_COMPLETE or error
-	select {
-	case msg := <-completeCh:
-		approved, _ := msg.Data["approved"].(bool)
-		if !approved {
+	for {
+		select {
+		case msg := <-completeCh:
+			approved, _ := msg.Data["approved"].(bool)
+			if approved {
+				o.sink.Phase("Workflow completed successfully!")
+				cancel()
+				wg.Wait()
+				return nil
+			}
+			// approved:false should not reach here after completion detector fix,
+			// but defensively just continue waiting.
+
+		case err := <-agentErrors:
 			cancel()
 			wg.Wait()
-			return fmt.Errorf("workflow completed with rejection")
+			return err
+
+		case <-ctx.Done():
+			wg.Wait()
+			return ctx.Err()
 		}
-		o.sink.Phase("Workflow completed successfully!")
-		cancel()
-		wg.Wait()
-		return nil
-
-	case err := <-agentErrors:
-		cancel()
-		wg.Wait()
-		return err
-
-	case <-ctx.Done():
-		wg.Wait()
-		return ctx.Err()
 	}
 }
 
@@ -258,7 +259,7 @@ func (o *Orchestrator) injectValidators(configs []AgentConfig) ([]AgentConfig, e
 
 	// Add completion agent that waits for ALL validators before publishing CLUSTER_COMPLETE.
 	expectedCount := validatorCount
-	var approvedSet sync.Map
+	approvedSet := &sync.Map{}
 
 	configs = append(configs, AgentConfig{
 		ID:            "completion",
@@ -273,11 +274,11 @@ func (o *Orchestrator) injectValidators(configs []AgentConfig) ([]AgentConfig, e
 			validatorID, _ := msg.Data["validator_id"].(string)
 
 			if !approved {
-				// Any rejection immediately triggers CLUSTER_COMPLETE with approved:false.
-				return map[string]any{
-					"approved": false,
-					"reason":   "validator " + validatorID + " rejected",
-				}, true
+				// Reset approved set for next validation round.
+				// Don't publish CLUSTER_COMPLETE — let the worker's
+				// VALIDATION_RESULT:rejected trigger handle retry.
+				approvedSet = &sync.Map{}
+				return nil, false
 			}
 
 			approvedSet.Store(validatorID, true)

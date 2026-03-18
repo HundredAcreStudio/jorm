@@ -212,7 +212,7 @@ func TestPassthroughAgent_CompletionDetector(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	expectedCount := 2
-	var approvedSet sync.Map
+	approvedSet := &sync.Map{}
 
 	cfg := AgentConfig{
 		ID:            "completion",
@@ -226,7 +226,8 @@ func TestPassthroughAgent_CompletionDetector(t *testing.T) {
 			approved, _ := msg.Data["approved"].(bool)
 			validatorID, _ := msg.Data["validator_id"].(string)
 			if !approved {
-				return map[string]any{"approved": false, "reason": "rejected by " + validatorID}, true
+				approvedSet = &sync.Map{}
+				return nil, false
 			}
 			approvedSet.Store(validatorID, true)
 			count := 0
@@ -287,15 +288,17 @@ func TestPassthroughAgent_CompletionDetector(t *testing.T) {
 	<-done
 }
 
-// TestPassthroughAgent_ImmediateRejectOnFailure verifies that if any validator rejects,
-// CLUSTER_COMPLETE fires immediately with approved=false.
-func TestPassthroughAgent_ImmediateRejectOnFailure(t *testing.T) {
+// TestPassthroughAgent_RejectionDoesNotPublishComplete verifies that a validator rejection
+// does NOT publish CLUSTER_COMPLETE, and that subsequent approvals from all validators
+// DO publish CLUSTER_COMPLETE with approved=true. This proves the retry loop is not
+// short-circuited by rejections.
+func TestPassthroughAgent_RejectionDoesNotPublishComplete(t *testing.T) {
 	b := newTestBus(t)
 	sink := &fakeSink{}
 	tmpDir := t.TempDir()
 
 	expectedCount := 2
-	var approvedSet sync.Map
+	approvedSet := &sync.Map{}
 
 	cfg := AgentConfig{
 		ID:            "completion",
@@ -309,7 +312,8 @@ func TestPassthroughAgent_ImmediateRejectOnFailure(t *testing.T) {
 			approved, _ := msg.Data["approved"].(bool)
 			validatorID, _ := msg.Data["validator_id"].(string)
 			if !approved {
-				return map[string]any{"approved": false, "reason": "rejected by " + validatorID}, true
+				approvedSet = &sync.Map{}
+				return nil, false
 			}
 			approvedSet.Store(validatorID, true)
 			count := 0
@@ -333,6 +337,7 @@ func TestPassthroughAgent_ImmediateRejectOnFailure(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
+	// Send a rejection — CLUSTER_COMPLETE must NOT be published.
 	b.Publish(bus.Message{
 		ClusterID: "test-cluster",
 		Topic:     bus.TopicValidationResult,
@@ -341,13 +346,42 @@ func TestPassthroughAgent_ImmediateRejectOnFailure(t *testing.T) {
 	})
 
 	select {
+	case <-completeCh:
+		t.Fatal("CLUSTER_COMPLETE must NOT be published on rejection")
+	case <-time.After(200 * time.Millisecond):
+		// expected: no CLUSTER_COMPLETE on rejection
+	}
+
+	// Now simulate a new validation round where both validators approve.
+	b.Publish(bus.Message{
+		ClusterID: "test-cluster",
+		Topic:     bus.TopicValidationResult,
+		Sender:    "validator-build",
+		Data:      map[string]any{"approved": true, "validator_id": "validator-build"},
+	})
+
+	select {
+	case <-completeCh:
+		t.Fatal("CLUSTER_COMPLETE should NOT fire after only 1 of 2 validators approve")
+	case <-time.After(200 * time.Millisecond):
+		// expected
+	}
+
+	b.Publish(bus.Message{
+		ClusterID: "test-cluster",
+		Topic:     bus.TopicValidationResult,
+		Sender:    "validator-tests",
+		Data:      map[string]any{"approved": true, "validator_id": "validator-tests"},
+	})
+
+	select {
 	case msg := <-completeCh:
 		approved, _ := msg.Data["approved"].(bool)
-		if approved {
-			t.Error("expected CLUSTER_COMPLETE with approved=false on rejection")
+		if !approved {
+			t.Error("expected CLUSTER_COMPLETE with approved=true after all validators approve")
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for CLUSTER_COMPLETE after rejection")
+		t.Fatal("timed out waiting for CLUSTER_COMPLETE after all validators approved")
 	}
 
 	cancel()
