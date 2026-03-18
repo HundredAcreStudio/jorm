@@ -4,14 +4,22 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
+
+	"os/exec"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 
+	"github.com/jorm/internal/bus"
+	"github.com/jorm/internal/config"
+	"github.com/jorm/internal/conductor"
 	"github.com/jorm/internal/loop"
+	"github.com/jorm/internal/orchestrator"
 	"github.com/jorm/internal/store"
 	"github.com/jorm/internal/tui"
 )
@@ -34,9 +42,18 @@ func main() {
 	root.PersistentFlags().StringVar(&profile, "profile", "", "validator profile to use")
 	root.PersistentFlags().BoolVar(&noTUI, "no-tui", false, "disable TUI, use plain text output")
 
+	// Run command
+	var (
+		worktreeFlag bool
+		prFlag       bool
+		shipFlag     bool
+		debugFlag    bool
+		modelFlag    string
+	)
+
 	runCmd := &cobra.Command{
-		Use:   "run <issue-id or prompt>",
-		Short: "Run the dev loop for an issue ID or freeform prompt",
+		Use:   "run <issue-id|file|prompt>",
+		Short: "Run the dev loop for an issue ID, markdown file, or freeform prompt",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			arg := args[0]
@@ -44,11 +61,25 @@ func main() {
 				ConfigPath: configPath,
 				RepoDir:    repoDir,
 				Profile:    profile,
+				Worktree:   worktreeFlag,
+				PR:         prFlag,
+				Ship:       shipFlag,
+				Debug:      debugFlag,
+				Model:      modelFlag,
 			}
 
-			// If the arg looks like a number, treat it as an issue ID
+			// Detect input type: number = issue ID, .md file = file provider, else = freeform prompt
 			if isIssueID(arg) {
 				opts.IssueID = arg
+			} else if isMarkdownFile(arg) {
+				opts.IssueID = strings.TrimSuffix(filepath.Base(arg), filepath.Ext(arg))
+				opts.Title = filepath.Base(arg)
+				// Body will be loaded by the loop from the file
+				data, err := os.ReadFile(arg)
+				if err != nil {
+					return fmt.Errorf("reading file %s: %w", arg, err)
+				}
+				opts.Body = string(data)
 			} else {
 				// Freeform prompt
 				opts.IssueID = fmt.Sprintf("prompt-%d", time.Now().Unix())
@@ -62,7 +93,13 @@ func main() {
 			return tui.Run(context.Background(), opts)
 		},
 	}
+	runCmd.Flags().BoolVar(&worktreeFlag, "worktree", false, "create git worktree for isolation")
+	runCmd.Flags().BoolVar(&prFlag, "pr", false, "create PR on completion (implies --worktree)")
+	runCmd.Flags().BoolVar(&shipFlag, "ship", false, "create PR and auto-merge (implies --pr)")
+	runCmd.Flags().BoolVar(&debugFlag, "debug", false, "enable debug logging")
+	runCmd.Flags().StringVar(&modelFlag, "model", "", "model override (e.g. sonnet, opus, haiku)")
 
+	// Resume command
 	resumeCmd := &cobra.Command{
 		Use:   "resume <issue-id>",
 		Short: "Resume a previous run for an issue",
@@ -78,6 +115,7 @@ func main() {
 		},
 	}
 
+	// List command
 	listCmd := &cobra.Command{
 		Use:   "list",
 		Short: "List all jorm runs",
@@ -117,7 +155,286 @@ func main() {
 		},
 	}
 
-	root.AddCommand(runCmd, resumeCmd, listCmd)
+	// Status command
+	statusCmd := &cobra.Command{
+		Use:   "status [run-id]",
+		Short: "Show status of a run or all runs",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := store.New()
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+
+			if len(args) == 1 {
+				run, err := st.Load(args[0])
+				if err != nil {
+					return fmt.Errorf("loading run: %w", err)
+				}
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintf(w, "ID:\t%s\n", run.ID)
+				fmt.Fprintf(w, "Issue:\t%s\n", run.IssueID)
+				fmt.Fprintf(w, "Branch:\t%s\n", run.Branch)
+				fmt.Fprintf(w, "Status:\t%s\n", run.Status)
+				fmt.Fprintf(w, "Attempts:\t%d\n", run.Attempt)
+				fmt.Fprintf(w, "Worktree:\t%s\n", run.WorktreeDir)
+				fmt.Fprintf(w, "Created:\t%s\n", run.CreatedAt.Format(time.RFC3339))
+				fmt.Fprintf(w, "Updated:\t%s\n", run.UpdatedAt.Format(time.RFC3339))
+				if run.Findings != "" {
+					fmt.Fprintf(w, "Findings:\t%s\n", run.Findings)
+				}
+				return w.Flush()
+			}
+
+			runs, err := st.List()
+			if err != nil {
+				return err
+			}
+			if len(runs) == 0 {
+				fmt.Println("No runs found.")
+				return nil
+			}
+
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tISSUE\tSTATUS\tATTEMPTS\tUPDATED")
+			for _, r := range runs {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
+					r.ID, r.IssueID, r.Status, r.Attempt, r.UpdatedAt.Format("2006-01-02 15:04"))
+			}
+			return w.Flush()
+		},
+	}
+
+	// Logs command
+	var followFlag bool
+	logsCmd := &cobra.Command{
+		Use:   "logs <run-id>",
+		Short: "View logs for a run",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			logPath := filepath.Join(home, ".jorm", "logs", args[0]+".log")
+
+			if followFlag {
+				c := exec.Command("tail", "-f", logPath)
+				c.Stdout = os.Stdout
+				c.Stderr = os.Stderr
+				return c.Run()
+			}
+
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				return fmt.Errorf("reading log file: %w", err)
+			}
+			fmt.Print(string(data))
+			return nil
+		},
+	}
+	logsCmd.Flags().BoolVarP(&followFlag, "follow", "f", false, "tail the log file")
+
+	// Stop command
+	stopCmd := &cobra.Command{
+		Use:   "stop <run-id>",
+		Short: "Signal a running jorm process to stop",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return err
+			}
+			signalPath := filepath.Join(home, ".jorm", fmt.Sprintf("stop-%s", args[0]))
+			if err := os.WriteFile(signalPath, []byte("stop"), 0o644); err != nil {
+				return fmt.Errorf("writing stop signal: %w", err)
+			}
+			fmt.Printf("Stop signal written for run %s\n", args[0])
+			return nil
+		},
+	}
+
+	// Clean command
+	var cleanAll bool
+	cleanCmd := &cobra.Command{
+		Use:   "clean [run-id]",
+		Short: "Clean up worktrees and run data",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := store.New()
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+
+			if cleanAll {
+				runs, err := st.List()
+				if err != nil {
+					return err
+				}
+				var errs []string
+				for _, r := range runs {
+					if err := cleanRun(st, r); err != nil {
+						errs = append(errs, err.Error())
+					}
+				}
+				if len(errs) > 0 {
+					return fmt.Errorf("cleaning runs: %s", strings.Join(errs, "; "))
+				}
+				fmt.Printf("Cleaned %d runs\n", len(runs))
+				return nil
+			}
+
+			if len(args) == 0 {
+				return fmt.Errorf("specify a run-id or use --all")
+			}
+
+			run, err := st.Load(args[0])
+			if err != nil {
+				return fmt.Errorf("loading run: %w", err)
+			}
+			if err := cleanRun(st, run); err != nil {
+				return err
+			}
+			fmt.Printf("Cleaned run %s\n", run.ID)
+			return nil
+		},
+	}
+	cleanCmd.Flags().BoolVar(&cleanAll, "all", false, "clean all runs")
+
+	// Inspect command
+	var timelineFlag bool
+	inspectCmd := &cobra.Command{
+		Use:   "inspect <run-id>",
+		Short: "Inspect the message bus ledger for a run",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			st, err := store.New()
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+
+			msgBus := bus.New(st.DB())
+			msgs, err := msgBus.Query(args[0], bus.QueryOpts{})
+			if err != nil {
+				return fmt.Errorf("querying messages: %w", err)
+			}
+
+			if len(msgs) == 0 {
+				fmt.Println("No messages found for this run.")
+				return nil
+			}
+
+			if timelineFlag {
+				for _, m := range msgs {
+					fmt.Printf("%s  %-25s  %-15s  %s\n",
+						m.Timestamp.Format("15:04:05.000"),
+						m.Topic,
+						m.Sender,
+						truncate(m.Content, 80))
+				}
+				return nil
+			}
+
+			for i, m := range msgs {
+				if i > 0 {
+					fmt.Println(strings.Repeat("─", 80))
+				}
+				fmt.Printf("Topic:   %s\n", m.Topic)
+				fmt.Printf("Sender:  %s\n", m.Sender)
+				fmt.Printf("Time:    %s\n", m.Timestamp.Format(time.RFC3339))
+				if m.Content != "" {
+					fmt.Printf("Content:\n%s\n", m.Content)
+				}
+			}
+			return nil
+		},
+	}
+	inspectCmd.Flags().BoolVar(&timelineFlag, "timeline", false, "compact one-line-per-message view")
+
+	// Config command
+	var (
+		validateConfig bool
+		workflowName   string
+	)
+	configCmd := &cobra.Command{
+		Use:   "config",
+		Short: "Show resolved configuration",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load(configPath)
+			if err != nil {
+				if validateConfig {
+					fmt.Printf("Config validation failed: %s\n", err)
+					return err
+				}
+				return err
+			}
+
+			if validateConfig {
+				// Verify profiles reference valid validators
+				for name, ids := range cfg.Profiles {
+					if _, err := cfg.ValidatorsForProfile(name); err != nil {
+						fmt.Printf("Profile %q: %s\n", name, err)
+						return err
+					}
+					fmt.Printf("Profile %q: %d validators OK\n", name, len(ids))
+				}
+				fmt.Println("Config is valid.")
+				return nil
+			}
+
+			if workflowName != "" {
+				templates := conductor.BuiltinTemplates()
+				agents, ok := templates[workflowName]
+				if !ok {
+					return fmt.Errorf("unknown workflow: %s\nAvailable: %s", workflowName, availableWorkflows(templates))
+				}
+				for _, a := range agents {
+					fmt.Printf("  %-15s  role=%-12s  model=%-8s  triggers=%d\n",
+						a.Name, a.Role, a.Model, len(a.Triggers))
+				}
+				return nil
+			}
+
+			// Print resolved config
+			fmt.Printf("Config: %s\n", configPath)
+			fmt.Printf("Model: %s\n", cfg.Model)
+			fmt.Printf("Max Attempts: %d (0=unlimited)\n", cfg.MaxAttempts)
+			fmt.Printf("Profile: %s\n", cfg.Profile)
+			fmt.Printf("Issue Provider: %s\n", cfg.IssueProvider)
+			fmt.Printf("Conductor: enabled=%v classify_model=%s\n", cfg.Conductor.Enabled, cfg.Conductor.ClassifyModel)
+			if len(cfg.Validators) > 0 {
+				fmt.Printf("Validators: %d\n", len(cfg.Validators))
+				for _, v := range cfg.Validators {
+					fmt.Printf("  - %s (%s/%s) on_fail=%s run_on=%s\n", v.Name, v.Type, v.Mode, v.OnFail, v.RunOn)
+				}
+			}
+			if len(cfg.Profiles) > 0 {
+				fmt.Printf("Profiles:\n")
+				for name, ids := range cfg.Profiles {
+					fmt.Printf("  %s: %s\n", name, strings.Join(ids, ", "))
+				}
+			}
+			return nil
+		},
+	}
+	configCmd.Flags().BoolVar(&validateConfig, "validate", false, "validate config file")
+	configCmd.Flags().StringVar(&workflowName, "workflow", "", "show agents for a workflow template")
+
+	// Init command (stub)
+	initCmd := &cobra.Command{
+		Use:   "init",
+		Short: "Generate .jorm/ configuration (LLM-assisted)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println("jorm init: coming soon")
+			fmt.Println("For now, create .jorm/config.yaml manually.")
+			return nil
+		},
+	}
+
+	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd)
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -128,3 +445,38 @@ func isIssueID(s string) bool {
 	_, err := strconv.Atoi(s)
 	return err == nil
 }
+
+func isMarkdownFile(s string) bool {
+	ext := strings.ToLower(filepath.Ext(s))
+	return ext == ".md" || ext == ".markdown"
+}
+
+func truncate(s string, max int) string {
+	// Take first line only
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		s = s[:idx]
+	}
+	if len(s) > max {
+		return s[:max-3] + "..."
+	}
+	return s
+}
+
+func cleanRun(st *store.Store, r *store.RunState) error {
+	if r.WorktreeDir != "" {
+		os.RemoveAll(r.WorktreeDir)
+	}
+	if err := st.Delete(r.ID); err != nil {
+		return fmt.Errorf("deleting run %s: %w", r.ID, err)
+	}
+	return nil
+}
+
+func availableWorkflows(templates map[string][]orchestrator.AgentConfig) string {
+	names := make([]string, 0, len(templates))
+	for name := range templates {
+		names = append(names, name)
+	}
+	return strings.Join(names, ", ")
+}
+

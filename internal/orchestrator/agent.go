@@ -3,8 +3,8 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
-	"time"
 
 	"github.com/jorm/internal/agent"
 	"github.com/jorm/internal/agent/prompts"
@@ -63,6 +63,12 @@ type Agent struct {
 	workDir   string
 	repoDir   string
 	env       []string
+	totalCost float64
+}
+
+// TotalCost returns the accumulated cost from all Claude invocations by this agent.
+func (a *Agent) TotalCost() float64 {
+	return a.totalCost
 }
 
 // NewAgent creates a new agent instance.
@@ -137,6 +143,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			continue
 		}
 
+		// Accumulate cost
+		if result.Cost > 0 {
+			a.totalCost += result.Cost
+		}
+
 		// Publish OnComplete messages
 		for _, action := range a.Config.OnComplete {
 			data := make(map[string]any)
@@ -158,44 +169,51 @@ func (a *Agent) Run(ctx context.Context) error {
 }
 
 // waitForTrigger blocks until a message matches one of the agent's triggers.
+// Uses reflect.Select for proper blocking across multiple channels.
 func (a *Agent) waitForTrigger(ctx context.Context, channels map[string]<-chan bus.Message) (bus.Message, error) {
-	// Build a merged select across all trigger channels
-	cases := make([]struct {
-		topic   string
-		trigger Trigger
-	}, 0)
+	// Build reflect.SelectCase slice: first case is ctx.Done(), rest are trigger channels
+	selectCases := make([]reflect.SelectCase, 0, len(a.Config.Triggers)+1)
+	triggerMap := make([]Trigger, 0, len(a.Config.Triggers))
+
+	// Case 0: context cancellation
+	selectCases = append(selectCases, reflect.SelectCase{
+		Dir:  reflect.SelectRecv,
+		Chan: reflect.ValueOf(ctx.Done()),
+	})
+
+	// Remaining cases: trigger channels
 	for _, t := range a.Config.Triggers {
-		cases = append(cases, struct {
-			topic   string
-			trigger Trigger
-		}{t.Topic, t})
+		ch, ok := channels[t.Topic]
+		if !ok {
+			continue
+		}
+		selectCases = append(selectCases, reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(ch),
+		})
+		triggerMap = append(triggerMap, t)
 	}
 
 	for {
-		select {
-		case <-ctx.Done():
+		chosen, value, ok := reflect.Select(selectCases)
+
+		// Case 0: context cancelled
+		if chosen == 0 {
 			return bus.Message{}, ctx.Err()
-		default:
 		}
 
-		// Poll each channel (non-blocking) then sleep briefly
-		for _, c := range cases {
-			ch := channels[c.topic]
-			select {
-			case msg := <-ch:
-				if evaluatePredicate(c.trigger.Predicate, msg) {
-					return msg, nil
-				}
-			default:
-			}
+		// Channel closed
+		if !ok {
+			return bus.Message{}, fmt.Errorf("trigger channel closed for agent %s", a.Config.Name)
 		}
 
-		// Small sleep to avoid busy-waiting
-		select {
-		case <-ctx.Done():
-			return bus.Message{}, ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+		msg := value.Interface().(bus.Message)
+		trigger := triggerMap[chosen-1]
+
+		if evaluatePredicate(trigger.Predicate, msg) {
+			return msg, nil
 		}
+		// Predicate didn't match, loop back and wait again
 	}
 }
 

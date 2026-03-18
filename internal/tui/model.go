@@ -15,6 +15,13 @@ type validatorState struct {
 	status string // "pending", "running", "pass", "fail"
 }
 
+type agentInfo struct {
+	id        string
+	name      string
+	state     string
+	iteration int
+}
+
 type model struct {
 	// Header
 	issueTitle  string
@@ -34,6 +41,9 @@ type model struct {
 	// Validators
 	validators []validatorState
 
+	// Agents
+	agents []agentInfo
+
 	// Terminal size
 	width  int
 	height int
@@ -43,7 +53,9 @@ type model struct {
 	finalErr error
 
 	// Summary (collected for post-TUI display)
-	phases []string
+	phases      []string
+	classification string
+	totalCost   float64
 }
 
 func newModel(profile, modelName string, validatorNames []string) model {
@@ -129,6 +141,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case AgentStateChangeMsg:
+		found := false
+		for i := range m.agents {
+			if m.agents[i].id == msg.ID {
+				m.agents[i].state = msg.State
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.agents = append(m.agents, agentInfo{
+				id:    msg.ID,
+				name:  msg.Name,
+				state: msg.State,
+			})
+		}
+
 	case LoopDoneMsg:
 		m.done = true
 		m.finalErr = msg.Err
@@ -184,6 +213,18 @@ func (m model) View() string {
 		} else {
 			b.WriteString(fmt.Sprintf("  ✓ %s\n", m.phase))
 		}
+	}
+
+	// Agent status panel
+	if len(m.agents) > 0 {
+		b.WriteString("  Agents: ")
+		for i, a := range m.agents {
+			if i > 0 {
+				b.WriteString("  ")
+			}
+			b.WriteString(fmt.Sprintf("%s[%s]", a.name, a.state))
+		}
+		b.WriteString("\n")
 	}
 
 	// Viewport

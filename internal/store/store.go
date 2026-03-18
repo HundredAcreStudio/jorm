@@ -168,6 +168,18 @@ func (s *Store) List() ([]*RunState, error) {
 	return runs, rows.Err()
 }
 
+// Delete removes a run and its associated messages by ID.
+func (s *Store) Delete(id string) error {
+	_, err := s.db.Exec(`DELETE FROM runs WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("deleting run %s: %w", id, err)
+	}
+	if _, err := s.db.Exec(`DELETE FROM messages WHERE cluster_id = ?`, id); err != nil {
+		return fmt.Errorf("deleting messages for run %s: %w", id, err)
+	}
+	return nil
+}
+
 // Close closes the database connection.
 func (s *Store) Close() error {
 	return s.db.Close()

@@ -1,6 +1,9 @@
 package issue
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // Issue represents a work item from any provider.
 type Issue struct {
@@ -22,6 +25,12 @@ func NewProvider(providerType, token string) (Provider, error) {
 		return NewGitHubProvider(token)
 	case "linear":
 		return NewLinearProvider()
+	case "jira":
+		return NewJiraProvider(token)
+	case "file":
+		return nil, fmt.Errorf("file provider requires a path; use NewFileProvider directly")
+	case "string":
+		return nil, fmt.Errorf("string provider requires a prompt; use NewStringProvider directly")
 	default:
 		return NewGitHubProvider(token)
 	}

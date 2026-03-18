@@ -117,6 +117,7 @@ func (v *ClaudeReviewValidator) Validate(ctx context.Context, diff, workDir, rep
 // Passes if Claude exits cleanly (no VERDICT needed).
 type ClaudeActionValidator struct {
 	Config config.ValidatorConfig
+	Env    []string // environment for subprocess; nil uses os.Environ()
 }
 
 func (v *ClaudeActionValidator) Cfg() config.ValidatorConfig { return v.Config }
@@ -143,6 +144,7 @@ func (v *ClaudeActionValidator) Validate(ctx context.Context, diff, workDir, rep
 		Prompt:  promptText,
 		WorkDir: workDir,
 		Model:   "sonnet",
+		Env:     v.Env,
 	})
 	if err != nil {
 		return ValidatorResult{

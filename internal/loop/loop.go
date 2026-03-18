@@ -12,6 +12,7 @@ import (
 	gitpkg "github.com/jorm/internal/git"
 	"github.com/jorm/internal/hooks"
 	"github.com/jorm/internal/issue"
+	jormlog "github.com/jorm/internal/log"
 	"github.com/jorm/internal/orchestrator"
 	"github.com/jorm/internal/store"
 )
@@ -26,10 +27,23 @@ type Options struct {
 	Body       string
 	Resume     bool
 	Sink       events.Sink
+	Worktree   bool   // create git worktree (default: work in current dir)
+	PR         bool   // create PR on completion (implies Worktree)
+	Ship       bool   // PR + auto-merge (implies PR)
+	Debug      bool   // enable debug logging
+	Model      string // model override
 }
 
 // Run orchestrates the full jorm lifecycle.
 func Run(ctx context.Context, opts Options) error {
+	// Flag implications: --ship implies --pr implies --worktree
+	if opts.Ship {
+		opts.PR = true
+	}
+	if opts.PR {
+		opts.Worktree = true
+	}
+
 	sink := opts.Sink
 	if sink == nil {
 		sink = &events.PrintSink{}
@@ -38,6 +52,11 @@ func Run(ctx context.Context, opts Options) error {
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil {
 		return err
+	}
+
+	// Apply model override from CLI
+	if opts.Model != "" {
+		cfg.Model = opts.Model
 	}
 
 	profile := cfg.Profile
@@ -50,6 +69,16 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	defer st.Close()
+
+	// Create structured logger
+	runID := fmt.Sprintf("%s-%d", opts.IssueID, 1)
+	logger, err := jormlog.New(runID, opts.Debug)
+	if err != nil {
+		sink.Phase(fmt.Sprintf("Warning: could not create logger: %s", err))
+	} else {
+		defer logger.Close()
+		logger.Info("starting run", "issue_id", opts.IssueID, "worktree", opts.Worktree, "pr", opts.PR, "ship", opts.Ship)
+	}
 
 	if opts.Resume {
 		return resume(ctx, cfg, st, profile, opts, sink)
@@ -77,15 +106,28 @@ func Run(ctx context.Context, opts Options) error {
 		sink.IssueLoaded(iss.Title, iss.URL)
 	}
 
-	// Create worktree
-	sink.Phase("Creating worktree...")
-	wt, err := gitpkg.CreateWorktree(opts.RepoDir, opts.IssueID)
-	if err != nil {
-		return err
+	// Create worktree or use in-place
+	var wt *gitpkg.Worktree
+	if opts.Worktree {
+		sink.Phase("Creating worktree...")
+		wt, err = gitpkg.CreateWorktree(opts.RepoDir, opts.IssueID)
+		if err != nil {
+			return err
+		}
+		sink.Phase(fmt.Sprintf("Branch %s at %s", wt.Branch, wt.Dir))
+	} else {
+		sink.Phase("Working in current directory...")
+		wt, err = gitpkg.InPlaceWorktree(opts.RepoDir)
+		if err != nil {
+			return err
+		}
 	}
-	sink.Phase(fmt.Sprintf("Branch %s at %s", wt.Branch, wt.Dir))
 
-	// Defer cleanup only if no changes
+	if logger != nil {
+		logger.Info("worktree ready", "dir", wt.Dir, "branch", wt.Branch, "in_place", !opts.Worktree)
+	}
+
+	// Defer cleanup only if no changes (only for real worktrees)
 	defer func() {
 		hasChanges, _ := wt.HasChanges()
 		if !hasChanges {
@@ -98,7 +140,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	// Persist initial state
 	runState := &store.RunState{
-		ID:          fmt.Sprintf("%s-%d", opts.IssueID, 1),
+		ID:          runID,
 		IssueID:     opts.IssueID,
 		Branch:      wt.Branch,
 		WorktreeDir: wt.Dir,
@@ -112,7 +154,7 @@ func Run(ctx context.Context, opts Options) error {
 	subEnv := issueEnv(cfg.SubprocessEnv(), iss)
 
 	// Run conductor-driven multi-agent workflow
-	if err := runConductorMode(ctx, cfg, st, wt, sink, iss, runState, subEnv); err != nil {
+	if err := runConductorMode(ctx, cfg, st, wt, sink, iss, runState, subEnv, opts); err != nil {
 		return err
 	}
 
@@ -124,12 +166,14 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	runState.Status = "accepted"
-	st.Save(runState)
+	if err := st.Save(runState); err != nil {
+		return fmt.Errorf("saving run state: %w", err)
+	}
 	return nil
 }
 
 // runConductorMode runs the multi-agent conductor workflow.
-func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, wt *gitpkg.Worktree, sink events.Sink, iss *issue.Issue, runState *store.RunState, subEnv []string) error {
+func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, wt *gitpkg.Worktree, sink events.Sink, iss *issue.Issue, runState *store.RunState, subEnv []string, opts ...Options) error {
 	// Create message bus
 	msgBus := bus.New(st.DB())
 
@@ -154,7 +198,9 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 	orch := orchestrator.New(msgBus, cfg, wt, sink, subEnv)
 	if err := orch.Run(ctx, iss, runState.ID, agentConfigs); err != nil {
 		runState.Status = "rejected"
-		st.Save(runState)
+		if saveErr := st.Save(runState); saveErr != nil {
+			return fmt.Errorf("saving run state: %w (original: %w)", saveErr, err)
+		}
 		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
 		hookRunner.OnFailure(ctx)
 		return err
@@ -176,13 +222,48 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 		sink.ValidatorDone(result)
 		if result.IsBlocker() {
 			runState.Status = "failed"
-			st.Save(runState)
+			if saveErr := st.Save(runState); saveErr != nil {
+				return fmt.Errorf("saving run state: %w", saveErr)
+			}
 			return fmt.Errorf("accept-only validator %q failed: %s", result.Name, result.Output)
 		}
 	}
 
+	// Handle --pr/--ship: run pr-create action
+	if len(opts) > 0 && opts[0].PR {
+		sink.Phase("Creating PR...")
+		prEnv := make([]string, len(subEnv), len(subEnv)+1)
+		copy(prEnv, subEnv)
+		if opts[0].Ship {
+			prEnv = append(prEnv, "JORM_AUTO_MERGE=true")
+		}
+
+		diff, err := wt.Diff()
+		if err != nil {
+			return fmt.Errorf("getting diff for PR creation: %w", err)
+		}
+		prValidator := agentPkg.ClaudeActionValidator{
+			Config: config.ValidatorConfig{
+				ID:     "pr-create",
+				Name:   "PR Creation",
+				Type:   "claude",
+				Mode:   "action",
+				Prompt: "builtin:pr-create",
+				OnFail: "warn",
+			},
+			Env: prEnv,
+		}
+		result := prValidator.Validate(ctx, diff, wt.Dir, wt.RepoDir)
+		sink.ValidatorDone(result)
+		if !result.Passed {
+			sink.Phase(fmt.Sprintf("PR creation warning: %s", result.Output))
+		}
+	}
+
 	runState.Status = "accepted"
-	st.Save(runState)
+	if err := st.Save(runState); err != nil {
+		return fmt.Errorf("saving run state: %w", err)
+	}
 	return nil
 }
 
@@ -243,9 +324,11 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, _ string, 
 	subEnv := issueEnv(cfg.SubprocessEnv(), iss)
 
 	runState.Status = "running"
-	st.Save(runState)
+	if err := st.Save(runState); err != nil {
+		return fmt.Errorf("saving run state: %w", err)
+	}
 
-	if err := runConductorMode(ctx, cfg, st, wt, sink, iss, runState, subEnv); err != nil {
+	if err := runConductorMode(ctx, cfg, st, wt, sink, iss, runState, subEnv, opts); err != nil {
 		return err
 	}
 
@@ -257,6 +340,8 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, _ string, 
 	}
 
 	runState.Status = "accepted"
-	st.Save(runState)
+	if err := st.Save(runState); err != nil {
+		return fmt.Errorf("saving run state: %w", err)
+	}
 	return nil
 }

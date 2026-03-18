@@ -88,8 +88,8 @@ func TestApplyDefaultsSetsEmptyFields(t *testing.T) {
 	if cfg.Profile != "default" {
 		t.Errorf("Profile = %q, want %q", cfg.Profile, "default")
 	}
-	if cfg.MaxAttempts != 5 {
-		t.Errorf("MaxAttempts = %d, want 5", cfg.MaxAttempts)
+	if cfg.MaxAttempts != 0 {
+		t.Errorf("MaxAttempts = %d, want 0 (unlimited)", cfg.MaxAttempts)
 	}
 }
 

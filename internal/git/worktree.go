@@ -13,6 +13,7 @@ type Worktree struct {
 	Branch  string
 	Dir     string
 	RepoDir string
+	inPlace bool // true when operating in-place (no git worktree created)
 }
 
 // CreateWorktree creates a new git worktree and branch for the given issue.
@@ -42,6 +43,10 @@ func CreateWorktree(repoDir, issueID string) (*Worktree, error) {
 
 // Diff returns the full diff of all changes (committed + uncommitted) relative to the base branch.
 func (w *Worktree) Diff() (string, error) {
+	if w.inPlace {
+		return w.diffInPlace()
+	}
+
 	base, err := w.baseBranch()
 	if err != nil {
 		return "", err
@@ -93,6 +98,42 @@ func (w *Worktree) Diff() (string, error) {
 	return combined.String(), nil
 }
 
+// diffInPlace returns the diff against HEAD for in-place worktrees.
+func (w *Worktree) diffInPlace() (string, error) {
+	// Staged + unstaged changes against HEAD
+	cmd := exec.Command("git", "diff", "HEAD")
+	cmd.Dir = w.Dir
+	uncommitted, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("getting uncommitted diff: %w", err)
+	}
+
+	// Untracked files
+	cmd = exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	cmd.Dir = w.Dir
+	untracked, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("listing untracked files: %w", err)
+	}
+
+	var combined strings.Builder
+	combined.Write(uncommitted)
+
+	for _, f := range strings.Split(strings.TrimSpace(string(untracked)), "\n") {
+		if f == "" {
+			continue
+		}
+		cmd = exec.Command("git", "diff", "--no-index", "/dev/null", f)
+		cmd.Dir = w.Dir
+		out, _ := cmd.Output()
+		if len(out) > 0 {
+			combined.Write(out)
+		}
+	}
+
+	return combined.String(), nil
+}
+
 // HasChanges returns true if there are uncommitted changes or commits ahead of base.
 func (w *Worktree) HasChanges() (bool, error) {
 	// Check for uncommitted changes
@@ -104,6 +145,10 @@ func (w *Worktree) HasChanges() (bool, error) {
 	}
 	if len(strings.TrimSpace(string(out))) > 0 {
 		return true, nil
+	}
+
+	if w.inPlace {
+		return false, nil
 	}
 
 	// Check for commits ahead of base
@@ -120,8 +165,12 @@ func (w *Worktree) HasChanges() (bool, error) {
 	return strings.TrimSpace(string(out)) != "0", nil
 }
 
-// Cleanup removes the worktree and its branch.
+// Cleanup removes the worktree and its branch. No-op for in-place worktrees.
 func (w *Worktree) Cleanup() error {
+	if w.inPlace {
+		return nil
+	}
+
 	cmd := exec.Command("git", "worktree", "remove", w.Dir, "--force")
 	cmd.Dir = w.RepoDir
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -135,6 +184,30 @@ func (w *Worktree) Cleanup() error {
 	}
 
 	return nil
+}
+
+// InPlaceWorktree returns a Worktree that operates in the current directory
+// without creating a git worktree. Diff compares against HEAD, HasChanges
+// checks the working tree, and Cleanup is a no-op.
+func InPlaceWorktree(repoDir string) (*Worktree, error) {
+	// Get current branch name
+	cmd := exec.Command("git", "branch", "--show-current")
+	cmd.Dir = repoDir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("getting current branch: %w", err)
+	}
+	branch := strings.TrimSpace(string(out))
+	if branch == "" {
+		branch = "HEAD"
+	}
+
+	return &Worktree{
+		Branch:  branch,
+		Dir:     repoDir,
+		RepoDir: repoDir,
+		inPlace: true,
+	}, nil
 }
 
 // baseBranch detects whether the repo uses main or master.

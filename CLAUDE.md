@@ -19,14 +19,15 @@ CGO_ENABLED=1 is required because `mattn/go-sqlite3` is a CGO library. Ensure `g
 
 jorm is an autonomous dev loop harness: fetch issue → run Claude Code headlessly → validate → retry → post-accept hooks.
 
-- **`cmd/jorm/main.go`** — Cobra CLI with `run`, `resume`, `list` subcommands
+- **`cmd/jorm/main.go`** — Cobra CLI with `run`, `resume`, `list`, `status`, `logs`, `stop`, `clean`, `inspect`, `config`, `init` subcommands
 - **`internal/loop/loop.go`** — Top-level orchestrator: config → provider → worktree → cluster → hooks → state
 - **`internal/cluster/cluster.go`** — Core retry loop: builds worker prompt → calls Claude → gets diff → fans out validators (parallel via goroutines+channels, then sequential with short-circuit) → retries with injected findings
 - **`internal/agent/agent.go`** — Runs `claude --print --output-format stream-json`, parses streaming JSON for result text and cost. `resolveModel()` maps aliases (sonnet/opus/haiku) to full model IDs
 - **`internal/agent/validator.go`** — `Validator` interface with `ShellValidator` (exit code) and `ClaudeValidator` (blind review, looks for `VERDICT: ACCEPT`). `ValidatorResult.IsBlocker()` checks on_fail=="reject"
 - **`internal/config/config.go`** — YAML config loader with defaults (max_attempts=5, model=sonnet, profile=default). `ValidatorsForProfile()` resolves profile → validator configs
 - **`internal/git/worktree.go`** — Creates/cleans git worktrees on `jorm/issue-<id>` branches, provides `Diff()` and `HasChanges()`
-- **`internal/issue/`** — `Provider` interface with `GitHubProvider` (go-github) and `LinearProvider` (GraphQL, generic `linearGraphQL[T]` helper)
+- **`internal/log/logger.go`** — Structured logger using `log/slog` with file output to `~/.jorm/logs/<run-id>.log`
+- **`internal/issue/`** — `Provider` interface with `GitHubProvider`, `LinearProvider`, `JiraProvider`, `FileProvider`, and `StringProvider`
 - **`internal/store/store.go`** — SQLite persistence at `~/.jorm/jorm.db` for `RunState` (id, issue, branch, attempt, status, findings)
 - **`internal/hooks/hooks.go`** — Runs shell commands in worktree dir for on_complete/on_failure lifecycle events
 
@@ -36,6 +37,8 @@ jorm is an autonomous dev loop harness: fetch issue → run Claude Code headless
 - **Validator fan-out**: parallel validators run via goroutines + buffered channel + WaitGroup; sequential validators short-circuit on blocking reject
 - **Prompt injection on retry**: rejected findings are appended under "## Previous attempt was rejected. Fix these issues:" in the next worker prompt
 - **Worktree lifecycle**: cleanup deferred only if no changes were produced (keeps worktree if commits exist)
+- **In-place mode**: Default runs in current directory without creating a git worktree; `--worktree` creates isolated worktree
+- **Flag implications**: `--ship` implies `--pr` implies `--worktree`
 
 ## Code Style
 

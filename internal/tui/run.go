@@ -69,11 +69,25 @@ func printSummary(m model) {
 	if m.issueTitle != "" {
 		fmt.Printf("  %s %s\n", rBold("Issue:"), m.issueTitle)
 	}
+
+	// Classification
+	if m.classification != "" {
+		fmt.Printf("  %s %s\n", rBold("Classification:"), m.classification)
+	}
+
 	if m.attempt > 0 {
 		fmt.Printf("  %s %d  %s %s  %s %s\n",
 			rBold("Attempts:"), m.attempt,
 			rBold("Profile:"), m.profile,
 			rBold("Model:"), m.modelName)
+	}
+
+	// Agent summary
+	if len(m.agents) > 0 {
+		fmt.Printf("  %s %d agents\n", rBold("Agents:"), len(m.agents))
+		for _, a := range m.agents {
+			fmt.Printf("    %-15s  state=%s\n", a.name, a.state)
+		}
 	}
 
 	// Validator results
@@ -92,9 +106,14 @@ func printSummary(m model) {
 		fmt.Println()
 	}
 
+	// Cost
+	if m.totalCost > 0 {
+		fmt.Printf("  %s $%.4f\n", rBold("Total Cost:"), m.totalCost)
+	}
+
 	// Key phases (worktree location, hooks, results)
 	for _, phase := range m.phases {
-		if containsAny(phase, "Worktree kept", "Branch ", "Hook", "failed", "Failed", "push", "pr create", "✓") {
+		if containsAny(phase, "Worktree kept", "Branch ", "Hook", "failed", "Failed", "push", "pr create", "✓", "Workflow") {
 			fmt.Printf("  %s %s\n", rCyan("→"), phase)
 		}
 	}
