@@ -35,6 +35,19 @@ type ValidatorDoneMsg struct {
 	agent.ValidatorResult
 }
 
+// AgentStateChangeMsg signals an agent's state has changed.
+type AgentStateChangeMsg struct {
+	ID    string
+	Name  string
+	State string
+}
+
+// MessagePublishedMsg signals a message was published on the bus.
+type MessagePublishedMsg struct {
+	Topic  string
+	Sender string
+}
+
 // LoopDoneMsg signals the entire loop has finished.
 type LoopDoneMsg struct {
 	Err error

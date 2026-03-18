@@ -18,4 +18,10 @@ func (s *ProgramSink) ValidatorStart(id, name string) { s.P.Send(ValidatorStartM
 func (s *ProgramSink) ValidatorDone(result agent.ValidatorResult) {
 	s.P.Send(ValidatorDoneMsg{ValidatorResult: result})
 }
+func (s *ProgramSink) AgentStateChange(agentID, agentName, state string) {
+	s.P.Send(AgentStateChangeMsg{ID: agentID, Name: agentName, State: state})
+}
+func (s *ProgramSink) MessagePublished(topic, sender string) {
+	s.P.Send(MessagePublishedMsg{Topic: topic, Sender: sender})
+}
 func (s *ProgramSink) LoopDone(err error) { s.P.Send(LoopDoneMsg{Err: err}) }

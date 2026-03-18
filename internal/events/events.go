@@ -15,6 +15,8 @@ type Sink interface {
 	ClaudeOutput(text string)
 	ValidatorStart(id, name string)
 	ValidatorDone(result agent.ValidatorResult)
+	AgentStateChange(agentID, agentName, state string)
+	MessagePublished(topic, sender string)
 	LoopDone(err error)
 }
 
@@ -54,6 +56,14 @@ func (s *PrintSink) ValidatorDone(result agent.ValidatorResult) {
 	} else {
 		fmt.Printf("%s %s failed (%s)\n", pRed("✗"), result.Name, result.OnFail)
 	}
+}
+
+func (s *PrintSink) AgentStateChange(agentID, agentName, state string) {
+	fmt.Printf("%s [%s] %s\n", pCyan("⚙"), agentName, state)
+}
+
+func (s *PrintSink) MessagePublished(topic, sender string) {
+	fmt.Printf("%s %s → %s\n", pCyan("◆"), sender, topic)
 }
 
 func (s *PrintSink) LoopDone(err error) {

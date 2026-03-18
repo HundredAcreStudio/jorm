@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jorm/internal/cluster"
+	agentPkg "github.com/jorm/internal/agent"
+	"github.com/jorm/internal/bus"
+	"github.com/jorm/internal/conductor"
 	"github.com/jorm/internal/config"
 	"github.com/jorm/internal/events"
 	gitpkg "github.com/jorm/internal/git"
 	"github.com/jorm/internal/hooks"
 	"github.com/jorm/internal/issue"
+	"github.com/jorm/internal/orchestrator"
 	"github.com/jorm/internal/store"
 )
 
@@ -108,25 +111,8 @@ func Run(ctx context.Context, opts Options) error {
 	// Build env with issue context
 	subEnv := issueEnv(cfg.SubprocessEnv(), iss)
 
-	// Run cluster
-	cl, err := cluster.New(cfg, profile, wt, sink)
-	if err != nil {
-		return err
-	}
-
-	if err := cl.Run(ctx, iss); err != nil {
-		runState.Status = "rejected"
-		st.Save(runState)
-		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
-		hookRunner.OnFailure(ctx)
-		return err
-	}
-
-	// Run accept-only validators
-	sink.Phase("Running post-accept validators...")
-	if err := cl.RunAcceptOnlyValidators(ctx); err != nil {
-		runState.Status = "failed"
-		st.Save(runState)
+	// Run conductor-driven multi-agent workflow
+	if err := runConductorMode(ctx, cfg, st, wt, sink, iss, runState, subEnv); err != nil {
 		return err
 	}
 
@@ -142,6 +128,73 @@ func Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
+// runConductorMode runs the multi-agent conductor workflow.
+func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, wt *gitpkg.Worktree, sink events.Sink, iss *issue.Issue, runState *store.RunState, subEnv []string) error {
+	// Create message bus
+	msgBus := bus.New(st.DB())
+
+	// Classify the issue
+	cond := conductor.New(cfg.Conductor.ClassifyModel, wt.Dir, subEnv, sink)
+	cls, err := cond.Classify(ctx, iss)
+	if err != nil {
+		return fmt.Errorf("conductor classification: %w", err)
+	}
+
+	// Select workflow template
+	templateName := cond.SelectTemplate(cls)
+	sink.Phase(fmt.Sprintf("Workflow: %s (%s/%s)", templateName, cls.Complexity, cls.Type))
+
+	templates := conductor.BuiltinTemplates()
+	agentConfigs, ok := templates[templateName]
+	if !ok {
+		return fmt.Errorf("unknown workflow template: %s", templateName)
+	}
+
+	// Run the orchestrator
+	orch := orchestrator.New(msgBus, cfg, wt, sink, subEnv)
+	if err := orch.Run(ctx, iss, runState.ID, agentConfigs); err != nil {
+		runState.Status = "rejected"
+		st.Save(runState)
+		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
+		hookRunner.OnFailure(ctx)
+		return err
+	}
+
+	// Run accept-only validators (commit, etc.)
+	sink.Phase("Running post-accept validators...")
+	validators, _ := cfg.ValidatorsForProfile(cfg.Profile)
+	for _, v := range validators {
+		if v.RunOn != "accept_only" {
+			continue
+		}
+		built, err := buildSingleValidator(v)
+		if err != nil {
+			return err
+		}
+		diff, _ := wt.Diff()
+		result := built.Validate(ctx, diff, wt.Dir, wt.RepoDir)
+		sink.ValidatorDone(result)
+		if result.IsBlocker() {
+			runState.Status = "failed"
+			st.Save(runState)
+			return fmt.Errorf("accept-only validator %q failed: %s", result.Name, result.Output)
+		}
+	}
+
+	runState.Status = "accepted"
+	st.Save(runState)
+	return nil
+}
+
+// buildSingleValidator creates a single validator from config.
+func buildSingleValidator(cfg config.ValidatorConfig) (agentPkg.Validator, error) {
+	validators, err := agentPkg.BuildValidators([]config.ValidatorConfig{cfg})
+	if err != nil {
+		return nil, err
+	}
+	return validators[0], nil
+}
+
 // issueEnv appends issue context env vars to the base env.
 func issueEnv(base []string, iss *issue.Issue) []string {
 	env := make([]string, len(base), len(base)+3)
@@ -154,7 +207,7 @@ func issueEnv(base []string, iss *issue.Issue) []string {
 	return env
 }
 
-func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile string, opts Options, sink events.Sink) error {
+func resume(ctx context.Context, cfg *config.Config, st *store.Store, _ string, opts Options, sink events.Sink) error {
 	sink.Phase("Resuming...")
 
 	runState, err := st.LoadByIssue(opts.IssueID)
@@ -192,24 +245,11 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, profile st
 	runState.Status = "running"
 	st.Save(runState)
 
-	cl, err := cluster.New(cfg, profile, wt, sink)
-	if err != nil {
+	if err := runConductorMode(ctx, cfg, st, wt, sink, iss, runState, subEnv); err != nil {
 		return err
 	}
 
-	if err := cl.Run(ctx, iss); err != nil {
-		runState.Status = "rejected"
-		st.Save(runState)
-		return err
-	}
-
-	sink.Phase("Running post-accept validators...")
-	if err := cl.RunAcceptOnlyValidators(ctx); err != nil {
-		runState.Status = "failed"
-		st.Save(runState)
-		return err
-	}
-
+	// Run hooks
 	sink.Phase("Running completion hooks...")
 	hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
 	if err := hookRunner.OnComplete(ctx); err != nil {

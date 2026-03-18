@@ -15,10 +15,16 @@ type Config struct {
 	Validators    []ValidatorConfig          `yaml:"validators"`
 	Profiles      map[string][]string        `yaml:"profiles"`
 	Cluster       ClusterConfig              `yaml:"cluster"`
+	Conductor     ConductorConfig            `yaml:"conductor"`
 	IssueProvider string                     `yaml:"issue_provider"` // "github", "linear", "jira"
 	Providers     map[string]ProviderConfig  `yaml:"providers"`
 	Hooks         HooksConfig                `yaml:"hooks"`
 	Env           map[string]string          `yaml:"env"` // extra env vars injected into all subprocesses
+}
+
+type ConductorConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	ClassifyModel string `yaml:"classify_model"` // default: "haiku"
 }
 
 type ProviderConfig struct {

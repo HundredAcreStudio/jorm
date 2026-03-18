@@ -46,6 +46,12 @@ func New() (*Store, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	// Enable WAL mode for concurrent reads from multiple agent goroutines
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enabling WAL mode: %w", err)
+	}
+
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
 		db.Close()
@@ -70,9 +76,33 @@ func (s *Store) migrate() error {
 		)
 	`)
 	if err != nil {
-		return fmt.Errorf("migrating database: %w", err)
+		return fmt.Errorf("migrating runs table: %w", err)
 	}
+
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS messages (
+			id TEXT PRIMARY KEY,
+			cluster_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			sender TEXT NOT NULL,
+			timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			content TEXT NOT NULL DEFAULT '',
+			data TEXT NOT NULL DEFAULT '{}'
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("migrating messages table: %w", err)
+	}
+
+	// Index for efficient queries by cluster + topic
+	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_cluster_topic ON messages(cluster_id, topic, timestamp)`)
+
 	return nil
+}
+
+// DB exposes the underlying database connection for the message bus.
+func (s *Store) DB() *sql.DB {
+	return s.db
 }
 
 // Save upserts a run state.

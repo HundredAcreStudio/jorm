@@ -11,6 +11,11 @@ model: opus
 # Default validator profile
 profile: default
 
+# Conductor: multi-agent orchestration
+conductor:
+  enabled: true
+  classify_model: haiku
+
 # Issue provider: "github", "linear", or "jira"
 issue_provider: github
 
