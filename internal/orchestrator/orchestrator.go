@@ -154,6 +154,7 @@ func (o *Orchestrator) Run(ctx context.Context, iss *issue.Issue, clusterID stri
 
 // injectValidators adds validator agents from the config profile into the agent list.
 // Validators trigger on IMPLEMENTATION_READY and publish VALIDATION_RESULT.
+// Also replaces any existing completion agent with one that waits for ALL validators.
 func (o *Orchestrator) injectValidators(configs []AgentConfig) ([]AgentConfig, error) {
 	profile := o.cfg.Profile
 	validators, err := o.cfg.ValidatorsForProfile(profile)
@@ -161,36 +162,134 @@ func (o *Orchestrator) injectValidators(configs []AgentConfig) ([]AgentConfig, e
 		return nil, err
 	}
 
+	// Remove any pre-existing completion agent (templates include one, but we inject our own).
+	filtered := configs[:0]
+	for _, c := range configs {
+		if c.Role != "completion" {
+			filtered = append(filtered, c)
+		}
+	}
+	configs = filtered
+
+	validatorCount := 0
 	for _, v := range validators {
 		if v.RunOn == "accept_only" {
-			continue // handled separately after the workflow
+			continue
 		}
 
+		id := "validator-" + v.ID
+
+		switch v.Type {
+		case "shell":
+			configs = append(configs, AgentConfig{
+				ID:            id,
+				Name:          v.Name,
+				Role:          "validator",
+				ExecutionMode: "shell",
+				Command:       v.Command,
+				Triggers: []Trigger{
+					{Topic: bus.TopicImplementationReady, Predicate: "always"},
+				},
+				MaxIterations: 0,
+				OnComplete:    []OnCompleteAction{{Topic: bus.TopicValidationResult}},
+			})
+		case "claude":
+			vCopy := v // capture loop variable
+			var resultProcessor func(result *agent.ClaudeResult) map[string]any
+			if vCopy.Mode == "action" {
+				// Action mode: passes if Claude exits cleanly (no error).
+				resultProcessor = func(result *agent.ClaudeResult) map[string]any {
+					return map[string]any{
+						"approved":     true,
+						"validator_id": id,
+					}
+				}
+			} else {
+				// Review mode (default): check for VERDICT: ACCEPT.
+				resultProcessor = func(result *agent.ClaudeResult) map[string]any {
+					approved := false
+					if result != nil {
+						approved = contains(result.Text, "VERDICT: ACCEPT")
+					}
+					return map[string]any{
+						"approved":     approved,
+						"validator_id": id,
+					}
+				}
+			}
+			configs = append(configs, AgentConfig{
+				ID:            id,
+				Name:          vCopy.Name,
+				Role:          "validator",
+				ExecutionMode: "claude",
+				Triggers: []Trigger{
+					{Topic: bus.TopicImplementationReady, Predicate: "always"},
+				},
+				Prompt:          vCopy.Prompt,
+				Model:           "sonnet",
+				MaxIterations:   0,
+				OnComplete:      []OnCompleteAction{{Topic: bus.TopicValidationResult}},
+				ContextBuilder:  BuildValidatorContext,
+				ResultProcessor: resultProcessor,
+			})
+		default:
+			return nil, fmt.Errorf("unknown validator type %q for %q", v.Type, v.ID)
+		}
+
+		validatorCount++
+	}
+
+	// If no validators were injected, add a simple pass-through completion agent.
+	if validatorCount == 0 {
 		configs = append(configs, AgentConfig{
-			ID:   "validator-" + v.ID,
-			Name: v.Name,
-			Role: "validator",
-			Triggers: []Trigger{
-				{Topic: bus.TopicImplementationReady, Predicate: "always"},
-			},
-			Prompt:        v.Prompt,
-			Model:         "sonnet",
-			MaxIterations: 0, // unlimited — runs each time IMPLEMENTATION_READY fires
-			OnComplete:    []OnCompleteAction{{Topic: bus.TopicValidationResult}},
-			ContextBuilder: BuildValidatorContext,
-			ResultProcessor: func(result *agent.ClaudeResult) map[string]any {
-				// For now, simple pass/fail based on VERDICT
-				approved := false
-				if result != nil {
-					approved = contains(result.Text, "VERDICT: ACCEPT")
-				}
-				return map[string]any{
-					"approved":     approved,
-					"validator_id": v.ID,
-				}
+			ID:            "completion",
+			Name:          "Completion",
+			Role:          "completion",
+			ExecutionMode: "passthrough",
+			Triggers:      []Trigger{{Topic: bus.TopicImplementationReady, Predicate: "always"}},
+			MaxIterations: 1,
+			OnComplete:    []OnCompleteAction{{Topic: bus.TopicClusterComplete}},
+			TriggerProcessor: func(msg bus.Message) (map[string]any, bool) {
+				return map[string]any{"approved": true}, true
 			},
 		})
+		return configs, nil
 	}
+
+	// Add completion agent that waits for ALL validators before publishing CLUSTER_COMPLETE.
+	expectedCount := validatorCount
+	var approvedSet sync.Map
+
+	configs = append(configs, AgentConfig{
+		ID:            "completion",
+		Name:          "Completion",
+		Role:          "completion",
+		ExecutionMode: "passthrough",
+		Triggers:      []Trigger{{Topic: bus.TopicValidationResult, Predicate: "always"}},
+		MaxIterations: 0,
+		OnComplete:    []OnCompleteAction{{Topic: bus.TopicClusterComplete}},
+		TriggerProcessor: func(msg bus.Message) (map[string]any, bool) {
+			approved, _ := msg.Data["approved"].(bool)
+			validatorID, _ := msg.Data["validator_id"].(string)
+
+			if !approved {
+				// Any rejection immediately triggers CLUSTER_COMPLETE with approved:false.
+				return map[string]any{
+					"approved": false,
+					"reason":   "validator " + validatorID + " rejected",
+				}, true
+			}
+
+			approvedSet.Store(validatorID, true)
+			count := 0
+			approvedSet.Range(func(_, _ any) bool { count++; return true })
+
+			if count >= expectedCount {
+				return map[string]any{"approved": true}, true
+			}
+			return nil, false // not all validators have approved yet
+		},
+	})
 
 	return configs, nil
 }

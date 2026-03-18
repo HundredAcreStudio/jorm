@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"reflect"
 	"strings"
 
@@ -43,12 +44,19 @@ type AgentConfig struct {
 	Model         string
 	MaxIterations int
 	OnComplete    []OnCompleteAction
+	// ExecutionMode controls how the agent executes: "claude" (default), "shell", or "passthrough".
+	ExecutionMode string
+	// Command is the shell command to execute (only used when ExecutionMode=="shell").
+	Command string
 	// ContextBuilder is called to assemble the prompt context from the bus.
 	// If nil, the raw prompt is used as-is.
 	ContextBuilder func(b *bus.Bus, clusterID string) (string, error)
 	// ResultProcessor extracts structured data from the agent's output
 	// to include in the OnComplete message's Data field.
 	ResultProcessor func(result *agent.ClaudeResult) map[string]any
+	// TriggerProcessor processes trigger messages directly without executing Claude or shell.
+	// Used with ExecutionMode "passthrough". Returns (data, shouldPublish).
+	TriggerProcessor func(msg bus.Message) (map[string]any, bool)
 }
 
 // Agent is a running instance of an AgentConfig.
@@ -112,7 +120,77 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		}
 
-		// Build context
+		a.setState(StateExecuting)
+		a.Iteration++
+
+		// Passthrough mode: process trigger message directly without execution.
+		if a.Config.ExecutionMode == "passthrough" {
+			if a.Config.TriggerProcessor != nil {
+				data, shouldPublish := a.Config.TriggerProcessor(msg)
+				if shouldPublish {
+					for _, action := range a.Config.OnComplete {
+						a.bus.Publish(bus.Message{
+							ClusterID: a.clusterID,
+							Topic:     action.Topic,
+							Sender:    a.Config.ID,
+							Content:   msg.Content,
+							Data:      data,
+						})
+					}
+				}
+			}
+			continue
+		}
+
+		// Shell mode: execute command directly, check exit code.
+		if a.Config.ExecutionMode == "shell" {
+			if a.Config.Role == "validator" {
+				a.sink.ValidatorStart(a.Config.ID, a.Config.Name)
+			}
+
+			cmd := exec.CommandContext(ctx, "sh", "-c", a.Config.Command)
+			cmd.Dir = a.workDir
+			out, err := cmd.CombinedOutput()
+			approved := err == nil
+
+			a.sink.ClaudeOutput(fmt.Sprintf("[%s] $ %s", a.Config.Name, a.Config.Command))
+			if len(out) > 0 {
+				a.sink.ClaudeOutput(fmt.Sprintf("[%s] %s", a.Config.Name, string(out)))
+			}
+			if approved {
+				a.sink.ClaudeOutput(fmt.Sprintf("[%s] ✓ passed", a.Config.Name))
+			} else {
+				a.sink.ClaudeOutput(fmt.Sprintf("[%s] ✗ failed: %v", a.Config.Name, err))
+			}
+
+			for _, action := range a.Config.OnComplete {
+				a.bus.Publish(bus.Message{
+					ClusterID: a.clusterID,
+					Topic:     action.Topic,
+					Sender:    a.Config.ID,
+					Content:   string(out),
+					Data: map[string]any{
+						"approved":     approved,
+						"validator_id": a.Config.ID,
+						"agent_id":     a.Config.ID,
+						"iteration":    a.Iteration,
+					},
+				})
+			}
+
+			if a.Config.Role == "validator" {
+				a.sink.ValidatorDone(agent.ValidatorResult{
+					ValidatorID: a.Config.ID,
+					Name:        a.Config.Name,
+					Passed:      approved,
+					OnFail:      "reject",
+					Output:      string(out),
+				})
+			}
+			continue
+		}
+
+		// Claude mode (default): build prompt and run Claude.
 		a.setState(StateBuildingContext)
 		prompt, err := a.buildPrompt()
 		if err != nil {
@@ -120,14 +198,15 @@ func (a *Agent) Run(ctx context.Context) error {
 			continue
 		}
 
-		// Add trigger message context
 		if msg.Content != "" {
 			prompt = prompt + "\n\n## Context from " + msg.Topic + "\n\n" + msg.Content
 		}
 
-		// Execute
 		a.setState(StateExecuting)
-		a.Iteration++
+
+		if a.Config.Role == "validator" {
+			a.sink.ValidatorStart(a.Config.ID, a.Config.Name)
+		}
 
 		result, err := agent.RunClaude(ctx, agent.RunOptions{
 			Prompt:  prompt,
@@ -140,6 +219,15 @@ func (a *Agent) Run(ctx context.Context) error {
 		})
 		if err != nil {
 			a.sink.ClaudeOutput(fmt.Sprintf("[%s] error: %v", a.Config.Name, err))
+			if a.Config.Role == "validator" {
+				a.sink.ValidatorDone(agent.ValidatorResult{
+					ValidatorID: a.Config.ID,
+					Name:        a.Config.Name,
+					Passed:      false,
+					OnFail:      "reject",
+					Output:      fmt.Sprintf("error: %v", err),
+				})
+			}
 			continue
 		}
 
@@ -163,6 +251,24 @@ func (a *Agent) Run(ctx context.Context) error {
 				Sender:    a.Config.ID,
 				Content:   result.Text,
 				Data:      data,
+			})
+		}
+
+		// Notify TUI for validator agents after Claude completion
+		if a.Config.Role == "validator" {
+			approved := false
+			if a.Config.ResultProcessor != nil {
+				data := a.Config.ResultProcessor(result)
+				if v, ok := data["approved"].(bool); ok {
+					approved = v
+				}
+			}
+			a.sink.ValidatorDone(agent.ValidatorResult{
+				ValidatorID: a.Config.ID,
+				Name:        a.Config.Name,
+				Passed:      approved,
+				OnFail:      "reject",
+				Output:      result.Text,
 			})
 		}
 	}

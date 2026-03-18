@@ -6,13 +6,14 @@ import (
 )
 
 // BuiltinTemplates returns the default workflow templates.
+// Note: completion agents are NOT included here — the orchestrator's
+// injectValidators() adds the completion agent with proper multi-validator tracking.
 func BuiltinTemplates() map[string][]orchestrator.AgentConfig {
 	return map[string][]orchestrator.AgentConfig{
 		"single-worker": {
 			workerAgent("sonnet", 3, []orchestrator.Trigger{
 				{Topic: bus.TopicIssueOpened, Predicate: "always"},
 			}),
-			completionAgent(),
 		},
 
 		"worker-validator": {
@@ -20,7 +21,6 @@ func BuiltinTemplates() map[string][]orchestrator.AgentConfig {
 				{Topic: bus.TopicIssueOpened, Predicate: "always"},
 				{Topic: bus.TopicValidationResult, Predicate: "rejected"},
 			}),
-			completionAgent(),
 		},
 
 		"full-workflow": {
@@ -29,12 +29,10 @@ func BuiltinTemplates() map[string][]orchestrator.AgentConfig {
 				{Topic: bus.TopicPlanReady, Predicate: "always"},
 				{Topic: bus.TopicValidationResult, Predicate: "rejected"},
 			}),
-			completionAgent(),
 		},
 
 		"debug-workflow": {
 			debugWorkerAgent(),
-			completionAgent(),
 		},
 	}
 }
@@ -78,14 +76,3 @@ func debugWorkerAgent() orchestrator.AgentConfig {
 	return cfg
 }
 
-func completionAgent() orchestrator.AgentConfig {
-	return orchestrator.AgentConfig{
-		ID:            "completion",
-		Name:          "Completion",
-		Role:          "completion",
-		Triggers:      []orchestrator.Trigger{{Topic: bus.TopicValidationResult, Predicate: "approved"}},
-		Model:         "",
-		MaxIterations: 1,
-		OnComplete:    []orchestrator.OnCompleteAction{{Topic: bus.TopicClusterComplete}},
-	}
-}

@@ -147,6 +147,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ClassificationMsg:
 		m.classification = msg.Classification
 
+	case MessagePublishedMsg:
+		if msg.Topic == "VALIDATION_RESULT" {
+			// Update validator status to reflect that a result was published.
+			// The detailed pass/fail comes through ValidatorDoneMsg, but this
+			// ensures the TUI reacts to bus messages from the orchestrator agents.
+			for i := range m.validators {
+				if m.validators[i].id == msg.Sender || m.validators[i].name == msg.Sender {
+					if m.validators[i].status == "pending" {
+						m.validators[i].status = "running"
+					}
+					break
+				}
+			}
+		}
+
 	case AgentStateChangeMsg:
 		found := false
 		for i := range m.agents {
