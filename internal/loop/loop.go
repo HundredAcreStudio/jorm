@@ -160,7 +160,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	// Build env with issue context
-	subEnv := issueEnv(cfg.SubprocessEnv(), iss)
+	subEnv := issueEnv(cfg.SubprocessEnv(), iss, cfg.IssueProvider)
 
 	// Run conductor-driven multi-agent workflow
 	if err := runConductorMode(ctx, cfg, st, wt, sink, iss, runState, subEnv, opts); err != nil {
@@ -287,13 +287,17 @@ func buildSingleValidator(cfg config.ValidatorConfig) (agentPkg.Validator, error
 }
 
 // issueEnv appends issue context env vars to the base env.
-func issueEnv(base []string, iss *issue.Issue) []string {
-	env := make([]string, len(base), len(base)+3)
+func issueEnv(base []string, iss *issue.Issue, provider string) []string {
+	env := make([]string, len(base), len(base)+5)
 	copy(env, base)
 	env = append(env, "JORM_ISSUE_ID="+iss.ID)
 	env = append(env, "JORM_ISSUE_TITLE="+iss.Title)
 	if iss.URL != "" {
 		env = append(env, "JORM_ISSUE_URL="+iss.URL)
+	}
+	// Add closes reference for GitHub/Jira issues with numeric/key IDs
+	if (provider == "github" || provider == "jira") && iss.ID != "" {
+		env = append(env, "JORM_CLOSES_REF=Closes #"+iss.ID)
 	}
 	return env
 }
@@ -327,7 +331,7 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, _ string, 
 	}
 	sink.IssueLoaded(iss.Title, iss.URL)
 
-	subEnv := issueEnv(cfg.SubprocessEnv(), iss)
+	subEnv := issueEnv(cfg.SubprocessEnv(), iss, cfg.IssueProvider)
 
 	runState.Status = "running"
 	if err := st.Save(runState); err != nil {

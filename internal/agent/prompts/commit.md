@@ -15,7 +15,9 @@ Create a git commit for all changes in the working directory following Conventio
    - Determine the scope (module or area affected)
    - Understand the purpose and impact
 
-4. Create the commit using this exact format:
+4. Check for an issue reference: run `echo $JORM_CLOSES_REF`. If it outputs a value like `Closes #39`, include it in the commit message on its own line before the Co-Authored-By line.
+
+5. Create the commit using this exact format:
 
 ```bash
 git commit -m "$(cat <<'EOF'
@@ -24,6 +26,8 @@ git commit -m "$(cat <<'EOF'
 - <bullet point explaining what and why>
 - <bullet point with key implementation detail>
 - <additional bullets as needed, 2-5 total>
+
+<JORM_CLOSES_REF value here, if set>
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 EOF
@@ -43,4 +47,4 @@ EOF
 - If pre-commit hooks fail, fix the issue and create a NEW commit
 - If there are no changes to commit, report that and exit successfully
 
-5. After committing, run `git log -1 --stat` to verify.
+6. After committing, run `git log -1 --stat` to verify.
