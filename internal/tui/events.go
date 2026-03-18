@@ -48,6 +48,16 @@ type MessagePublishedMsg struct {
 	Sender string
 }
 
+// CostMsg updates the total cost display.
+type CostMsg struct {
+	TotalCost float64
+}
+
+// ClassificationMsg carries the conductor classification.
+type ClassificationMsg struct {
+	Classification string
+}
+
 // LoopDoneMsg signals the entire loop has finished.
 type LoopDoneMsg struct {
 	Err error

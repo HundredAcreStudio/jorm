@@ -48,7 +48,7 @@ func extractFirstHeading(content string) string {
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "# ") {
-			return strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			return strings.TrimSpace(strings.TrimPrefix(line, "# "))
 		}
 	}
 	return ""

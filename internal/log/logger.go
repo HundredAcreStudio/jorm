@@ -71,6 +71,11 @@ func (l *Logger) Error(msg string, args ...any) {
 	l.logger.Error(msg, args...)
 }
 
+// SlogLogger returns the underlying *slog.Logger for use with slog.SetDefault.
+func (l *Logger) SlogLogger() *slog.Logger {
+	return l.logger
+}
+
 // With returns a new Logger with the given attributes added.
 func (l *Logger) With(args ...any) *Logger {
 	return &Logger{

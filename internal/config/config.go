@@ -80,8 +80,7 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
-	// MaxAttempts 0 means unlimited. Only set default if not explicitly configured.
-	// We use -1 as sentinel: YAML unmarshals missing field as 0, which we keep as "unlimited".
+	// MaxAttempts 0 means unlimited (YAML unmarshals missing int as 0).
 	if cfg.Model == "" {
 		cfg.Model = "sonnet"
 	}

@@ -21,6 +21,7 @@ type RunState struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	Findings    string
+	InPlace     bool
 }
 
 // Store manages persistent run state in SQLite.
@@ -72,7 +73,8 @@ func (s *Store) migrate() error {
 			status TEXT NOT NULL DEFAULT 'running',
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			findings TEXT NOT NULL DEFAULT ''
+			findings TEXT NOT NULL DEFAULT '',
+			in_place INTEGER NOT NULL DEFAULT 0
 		)
 	`)
 	if err != nil {
@@ -97,6 +99,9 @@ func (s *Store) migrate() error {
 	// Index for efficient queries by cluster + topic
 	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_cluster_topic ON messages(cluster_id, topic, timestamp)`)
 
+	// Add in_place column for existing databases
+	s.db.Exec(`ALTER TABLE runs ADD COLUMN in_place INTEGER NOT NULL DEFAULT 0`)
+
 	return nil
 }
 
@@ -112,15 +117,20 @@ func (s *Store) Save(r *RunState) error {
 		r.CreatedAt = r.UpdatedAt
 	}
 
+	inPlace := 0
+	if r.InPlace {
+		inPlace = 1
+	}
+
 	_, err := s.db.Exec(`
-		INSERT INTO runs (id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO runs (id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings, in_place)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			attempt = excluded.attempt,
 			status = excluded.status,
 			updated_at = excluded.updated_at,
 			findings = excluded.findings
-	`, r.ID, r.IssueID, r.Branch, r.WorktreeDir, r.Attempt, r.Status, r.CreatedAt, r.UpdatedAt, r.Findings)
+	`, r.ID, r.IssueID, r.Branch, r.WorktreeDir, r.Attempt, r.Status, r.CreatedAt, r.UpdatedAt, r.Findings, inPlace)
 	if err != nil {
 		return fmt.Errorf("saving run: %w", err)
 	}
@@ -130,28 +140,32 @@ func (s *Store) Save(r *RunState) error {
 // Load retrieves a run by ID.
 func (s *Store) Load(id string) (*RunState, error) {
 	r := &RunState{}
-	err := s.db.QueryRow(`SELECT id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings FROM runs WHERE id = ?`, id).
-		Scan(&r.ID, &r.IssueID, &r.Branch, &r.WorktreeDir, &r.Attempt, &r.Status, &r.CreatedAt, &r.UpdatedAt, &r.Findings)
+	var inPlace int
+	err := s.db.QueryRow(`SELECT id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings, in_place FROM runs WHERE id = ?`, id).
+		Scan(&r.ID, &r.IssueID, &r.Branch, &r.WorktreeDir, &r.Attempt, &r.Status, &r.CreatedAt, &r.UpdatedAt, &r.Findings, &inPlace)
 	if err != nil {
 		return nil, fmt.Errorf("loading run %s: %w", id, err)
 	}
+	r.InPlace = inPlace != 0
 	return r, nil
 }
 
 // LoadByIssue retrieves the most recent run for an issue.
 func (s *Store) LoadByIssue(issueID string) (*RunState, error) {
 	r := &RunState{}
-	err := s.db.QueryRow(`SELECT id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings FROM runs WHERE issue_id = ? ORDER BY updated_at DESC LIMIT 1`, issueID).
-		Scan(&r.ID, &r.IssueID, &r.Branch, &r.WorktreeDir, &r.Attempt, &r.Status, &r.CreatedAt, &r.UpdatedAt, &r.Findings)
+	var inPlace int
+	err := s.db.QueryRow(`SELECT id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings, in_place FROM runs WHERE issue_id = ? ORDER BY updated_at DESC LIMIT 1`, issueID).
+		Scan(&r.ID, &r.IssueID, &r.Branch, &r.WorktreeDir, &r.Attempt, &r.Status, &r.CreatedAt, &r.UpdatedAt, &r.Findings, &inPlace)
 	if err != nil {
 		return nil, fmt.Errorf("loading run for issue %s: %w", issueID, err)
 	}
+	r.InPlace = inPlace != 0
 	return r, nil
 }
 
 // List returns all runs ordered by most recent first.
 func (s *Store) List() ([]*RunState, error) {
-	rows, err := s.db.Query(`SELECT id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings FROM runs ORDER BY updated_at DESC`)
+	rows, err := s.db.Query(`SELECT id, issue_id, branch, worktree_dir, attempt, status, created_at, updated_at, findings, in_place FROM runs ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("listing runs: %w", err)
 	}
@@ -160,24 +174,83 @@ func (s *Store) List() ([]*RunState, error) {
 	var runs []*RunState
 	for rows.Next() {
 		r := &RunState{}
-		if err := rows.Scan(&r.ID, &r.IssueID, &r.Branch, &r.WorktreeDir, &r.Attempt, &r.Status, &r.CreatedAt, &r.UpdatedAt, &r.Findings); err != nil {
+		var inPlace int
+		if err := rows.Scan(&r.ID, &r.IssueID, &r.Branch, &r.WorktreeDir, &r.Attempt, &r.Status, &r.CreatedAt, &r.UpdatedAt, &r.Findings, &inPlace); err != nil {
 			return nil, fmt.Errorf("scanning run: %w", err)
 		}
+		r.InPlace = inPlace != 0
 		runs = append(runs, r)
 	}
 	return runs, rows.Err()
 }
 
-// Delete removes a run and its associated messages by ID.
+// Delete removes a run and its associated messages by ID within a single transaction.
 func (s *Store) Delete(id string) error {
-	_, err := s.db.Exec(`DELETE FROM runs WHERE id = ?`, id)
+	tx, err := s.db.Begin()
 	if err != nil {
+		return fmt.Errorf("beginning transaction for delete: %w", err)
+	}
+
+	if _, err := tx.Exec(`DELETE FROM runs WHERE id = ?`, id); err != nil {
+		tx.Rollback()
 		return fmt.Errorf("deleting run %s: %w", id, err)
 	}
-	if _, err := s.db.Exec(`DELETE FROM messages WHERE cluster_id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM messages WHERE cluster_id = ?`, id); err != nil {
+		tx.Rollback()
 		return fmt.Errorf("deleting messages for run %s: %w", id, err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing delete for run %s: %w", id, err)
+	}
 	return nil
+}
+
+// CountRunsForIssue returns the number of existing runs for a given issue ID.
+func (s *Store) CountRunsForIssue(issueID string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM runs WHERE issue_id = ?`, issueID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("counting runs for issue %s: %w", issueID, err)
+	}
+	return count, nil
+}
+
+// QueryMessages retrieves messages for a cluster, optionally filtered by topic.
+func (s *Store) QueryMessages(clusterID string, topic string) ([]Message, error) {
+	var rows *sql.Rows
+	var err error
+
+	if topic != "" {
+		rows, err = s.db.Query(`SELECT id, cluster_id, topic, sender, timestamp, content, data FROM messages WHERE cluster_id = ? AND topic = ? ORDER BY timestamp ASC`, clusterID, topic)
+	} else {
+		rows, err = s.db.Query(`SELECT id, cluster_id, topic, sender, timestamp, content, data FROM messages WHERE cluster_id = ? ORDER BY timestamp ASC`, clusterID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying messages: %w", err)
+	}
+	defer rows.Close()
+
+	var msgs []Message
+	for rows.Next() {
+		var msg Message
+		var dataJSON string
+		if err := rows.Scan(&msg.ID, &msg.ClusterID, &msg.Topic, &msg.Sender, &msg.Timestamp, &msg.Content, &dataJSON); err != nil {
+			return nil, fmt.Errorf("scanning message: %w", err)
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, rows.Err()
+}
+
+// Message represents a stored bus message.
+type Message struct {
+	ID        string
+	ClusterID string
+	Topic     string
+	Sender    string
+	Timestamp time.Time
+	Content   string
 }
 
 // Close closes the database connection.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -15,7 +16,6 @@ import (
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 
-	"github.com/jorm/internal/bus"
 	"github.com/jorm/internal/config"
 	"github.com/jorm/internal/conductor"
 	"github.com/jorm/internal/loop"
@@ -316,8 +316,7 @@ func main() {
 			}
 			defer st.Close()
 
-			msgBus := bus.New(st.DB())
-			msgs, err := msgBus.Query(args[0], bus.QueryOpts{})
+			msgs, err := st.QueryMessages(args[0], "")
 			if err != nil {
 				return fmt.Errorf("querying messages: %w", err)
 			}
@@ -441,9 +440,11 @@ func main() {
 	}
 }
 
+var jiraKeyPattern = regexp.MustCompile(`^[A-Z]+-[0-9]+$`)
+
 func isIssueID(s string) bool {
 	_, err := strconv.Atoi(s)
-	return err == nil
+	return err == nil || jiraKeyPattern.MatchString(s)
 }
 
 func isMarkdownFile(s string) bool {

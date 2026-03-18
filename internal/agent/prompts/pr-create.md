@@ -34,3 +34,17 @@ Closes #<issue-number> (if applicable)
 - Description should help reviewers understand the context and changes
 - Reference the original issue if one exists
 - Mention any risks or areas that need careful review
+
+## IMPORTANT: Create the PR
+
+After generating the title and description, you MUST actually create the PR using the Bash tool:
+
+```bash
+gh pr create --title "<your title>" --body "<your description>"
+```
+
+If the environment variable `JORM_AUTO_MERGE` is set to `true`, add the `--auto` flag:
+
+```bash
+gh pr create --title "<your title>" --body "<your description>" --auto
+```

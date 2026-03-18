@@ -141,6 +141,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case CostMsg:
+		m.totalCost = msg.TotalCost
+
+	case ClassificationMsg:
+		m.classification = msg.Classification
+
 	case AgentStateChangeMsg:
 		found := false
 		for i := range m.agents {

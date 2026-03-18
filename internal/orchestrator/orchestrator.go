@@ -3,7 +3,11 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/jorm/internal/agent"
 	"github.com/jorm/internal/bus"
@@ -33,10 +37,49 @@ func New(b *bus.Bus, cfg *config.Config, worktree *gitpkg.Worktree, sink events.
 	}
 }
 
+// checkStopSignal returns true if the stop signal file exists for the given run ID.
+func checkStopSignal(runID string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	signalPath := filepath.Join(home, ".jorm", fmt.Sprintf("stop-%s", runID))
+	_, err = os.Stat(signalPath)
+	return err == nil
+}
+
+// removeStopSignal removes the stop signal file for the given run ID.
+func removeStopSignal(runID string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	os.Remove(filepath.Join(home, ".jorm", fmt.Sprintf("stop-%s", runID)))
+}
+
 // Run executes the multi-agent workflow for the given issue and agent template.
 func (o *Orchestrator) Run(ctx context.Context, iss *issue.Issue, clusterID string, agentConfigs []AgentConfig) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// Poll for stop signal file
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if checkStopSignal(clusterID) {
+					o.sink.Phase("Stop signal detected, cancelling...")
+					removeStopSignal(clusterID)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 
 	// Add validators from the config profile as validator agents
 	agentConfigs, err := o.injectValidators(agentConfigs)
@@ -153,14 +196,5 @@ func (o *Orchestrator) injectValidators(configs []AgentConfig) ([]AgentConfig, e
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }

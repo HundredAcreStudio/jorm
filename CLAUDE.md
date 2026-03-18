@@ -24,7 +24,7 @@ jorm is an autonomous dev loop harness: fetch issue → run Claude Code headless
 - **`internal/cluster/cluster.go`** — Core retry loop: builds worker prompt → calls Claude → gets diff → fans out validators (parallel via goroutines+channels, then sequential with short-circuit) → retries with injected findings
 - **`internal/agent/agent.go`** — Runs `claude --print --output-format stream-json`, parses streaming JSON for result text and cost. `resolveModel()` maps aliases (sonnet/opus/haiku) to full model IDs
 - **`internal/agent/validator.go`** — `Validator` interface with `ShellValidator` (exit code) and `ClaudeValidator` (blind review, looks for `VERDICT: ACCEPT`). `ValidatorResult.IsBlocker()` checks on_fail=="reject"
-- **`internal/config/config.go`** — YAML config loader with defaults (max_attempts=5, model=sonnet, profile=default). `ValidatorsForProfile()` resolves profile → validator configs
+- **`internal/config/config.go`** — YAML config loader with defaults (max_attempts=0 (unlimited), model=sonnet, profile=default). `ValidatorsForProfile()` resolves profile → validator configs
 - **`internal/git/worktree.go`** — Creates/cleans git worktrees on `jorm/issue-<id>` branches, provides `Diff()` and `HasChanges()`
 - **`internal/log/logger.go`** — Structured logger using `log/slog` with file output to `~/.jorm/logs/<run-id>.log`
 - **`internal/issue/`** — `Provider` interface with `GitHubProvider`, `LinearProvider`, `JiraProvider`, `FileProvider`, and `StringProvider`

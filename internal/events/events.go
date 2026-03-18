@@ -17,6 +17,8 @@ type Sink interface {
 	ValidatorDone(result agent.ValidatorResult)
 	AgentStateChange(agentID, agentName, state string)
 	MessagePublished(topic, sender string)
+	Cost(totalCost float64)
+	Classification(classification string)
 	LoopDone(err error)
 }
 
@@ -64,6 +66,14 @@ func (s *PrintSink) AgentStateChange(agentID, agentName, state string) {
 
 func (s *PrintSink) MessagePublished(topic, sender string) {
 	fmt.Printf("%s %s → %s\n", pCyan("◆"), sender, topic)
+}
+
+func (s *PrintSink) Cost(totalCost float64) {
+	fmt.Printf("%s Total cost: $%.4f\n", pCyan("→"), totalCost)
+}
+
+func (s *PrintSink) Classification(classification string) {
+	fmt.Printf("%s Classification: %s\n", pCyan("→"), classification)
 }
 
 func (s *PrintSink) LoopDone(err error) {

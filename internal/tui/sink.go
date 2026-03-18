@@ -24,4 +24,10 @@ func (s *ProgramSink) AgentStateChange(agentID, agentName, state string) {
 func (s *ProgramSink) MessagePublished(topic, sender string) {
 	s.P.Send(MessagePublishedMsg{Topic: topic, Sender: sender})
 }
+func (s *ProgramSink) Cost(totalCost float64) {
+	s.P.Send(CostMsg{TotalCost: totalCost})
+}
+func (s *ProgramSink) Classification(classification string) {
+	s.P.Send(ClassificationMsg{Classification: classification})
+}
 func (s *ProgramSink) LoopDone(err error) { s.P.Send(LoopDoneMsg{Err: err}) }

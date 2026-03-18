@@ -210,6 +210,16 @@ func InPlaceWorktree(repoDir string) (*Worktree, error) {
 	}, nil
 }
 
+// ReconstructWorktree creates a Worktree from persisted state (for resume).
+func ReconstructWorktree(branch, dir, repoDir string, inPlace bool) *Worktree {
+	return &Worktree{
+		Branch:  branch,
+		Dir:     dir,
+		RepoDir: repoDir,
+		inPlace: inPlace,
+	}
+}
+
 // baseBranch detects whether the repo uses main or master.
 func (w *Worktree) baseBranch() (string, error) {
 	cmd := exec.Command("git", "symbolic-ref", "refs/remotes/origin/HEAD")

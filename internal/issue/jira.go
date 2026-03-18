@@ -2,6 +2,7 @@ package issue
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,23 +13,29 @@ import (
 // JiraProvider fetches issues from the Jira REST API.
 type JiraProvider struct {
 	baseURL string
+	email   string
 	token   string
 	client  *http.Client
 }
 
 // NewJiraProvider creates a Jira issue provider.
-// It reads JIRA_BASE_URL from the environment (e.g. "https://mycompany.atlassian.net").
-// The token is a Bearer token (API token or PAT).
+// It reads JIRA_BASE_URL and JIRA_EMAIL from the environment.
+// Uses Basic auth with base64(email:token) for Atlassian Cloud.
 func NewJiraProvider(token string) (*JiraProvider, error) {
 	baseURL := os.Getenv("JIRA_BASE_URL")
 	if baseURL == "" {
 		return nil, fmt.Errorf("JIRA_BASE_URL environment variable is required")
+	}
+	email := os.Getenv("JIRA_EMAIL")
+	if email == "" {
+		return nil, fmt.Errorf("JIRA_EMAIL environment variable is required")
 	}
 	if token == "" {
 		return nil, fmt.Errorf("jira API token is required (set via providers.jira.token_var or providers.jira.token in config)")
 	}
 	return &JiraProvider{
 		baseURL: baseURL,
+		email:   email,
 		token:   token,
 		client:  &http.Client{},
 	}, nil
@@ -52,7 +59,7 @@ func (p *JiraProvider) Fetch(ctx context.Context, id string) (*Issue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating jira request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+p.token)
+	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(p.email+":"+p.token)))
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := p.client.Do(req)

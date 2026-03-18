@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	agentPkg "github.com/jorm/internal/agent"
 	"github.com/jorm/internal/bus"
@@ -70,13 +71,20 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	defer st.Close()
 
+	// Generate sequential run ID
+	runCount, err := st.CountRunsForIssue(opts.IssueID)
+	if err != nil {
+		return fmt.Errorf("counting runs for issue: %w", err)
+	}
+	runID := fmt.Sprintf("%s-%d", opts.IssueID, runCount+1)
+
 	// Create structured logger
-	runID := fmt.Sprintf("%s-%d", opts.IssueID, 1)
 	logger, err := jormlog.New(runID, opts.Debug)
 	if err != nil {
 		sink.Phase(fmt.Sprintf("Warning: could not create logger: %s", err))
 	} else {
 		defer logger.Close()
+		slog.SetDefault(logger.SlogLogger())
 		logger.Info("starting run", "issue_id", opts.IssueID, "worktree", opts.Worktree, "pr", opts.PR, "ship", opts.Ship)
 	}
 
@@ -145,6 +153,7 @@ func Run(ctx context.Context, opts Options) error {
 		Branch:      wt.Branch,
 		WorktreeDir: wt.Dir,
 		Status:      "running",
+		InPlace:     !opts.Worktree,
 	}
 	if err := st.Save(runState); err != nil {
 		return fmt.Errorf("saving run state: %w", err)
@@ -173,7 +182,7 @@ func Run(ctx context.Context, opts Options) error {
 }
 
 // runConductorMode runs the multi-agent conductor workflow.
-func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, wt *gitpkg.Worktree, sink events.Sink, iss *issue.Issue, runState *store.RunState, subEnv []string, opts ...Options) error {
+func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, wt *gitpkg.Worktree, sink events.Sink, iss *issue.Issue, runState *store.RunState, subEnv []string, opts Options) error {
 	// Create message bus
 	msgBus := bus.New(st.DB())
 
@@ -186,6 +195,7 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 
 	// Select workflow template
 	templateName := cond.SelectTemplate(cls)
+	sink.Classification(fmt.Sprintf("%s/%s", cls.Complexity, cls.Type))
 	sink.Phase(fmt.Sprintf("Workflow: %s (%s/%s)", templateName, cls.Complexity, cls.Type))
 
 	templates := conductor.BuiltinTemplates()
@@ -230,11 +240,11 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 	}
 
 	// Handle --pr/--ship: run pr-create action
-	if len(opts) > 0 && opts[0].PR {
+	if opts.PR {
 		sink.Phase("Creating PR...")
 		prEnv := make([]string, len(subEnv), len(subEnv)+1)
 		copy(prEnv, subEnv)
-		if opts[0].Ship {
+		if opts.Ship {
 			prEnv = append(prEnv, "JORM_AUTO_MERGE=true")
 		}
 
@@ -296,11 +306,7 @@ func resume(ctx context.Context, cfg *config.Config, st *store.Store, _ string, 
 		return fmt.Errorf("no previous run found for issue %s: %w", opts.IssueID, err)
 	}
 
-	wt := &gitpkg.Worktree{
-		Branch:  runState.Branch,
-		Dir:     runState.WorktreeDir,
-		RepoDir: opts.RepoDir,
-	}
+	wt := gitpkg.ReconstructWorktree(runState.Branch, runState.WorktreeDir, opts.RepoDir, runState.InPlace)
 
 	var iss *issue.Issue
 	if opts.Title != "" {
