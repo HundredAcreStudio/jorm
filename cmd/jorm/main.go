@@ -24,6 +24,13 @@ import (
 	"github.com/jorm/internal/tui"
 )
 
+// Set via -ldflags at build time.
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = "unknown"
+)
+
 func main() {
 	var (
 		configPath string
@@ -422,6 +429,15 @@ func main() {
 	configCmd.Flags().BoolVar(&validateConfig, "validate", false, "validate config file")
 	configCmd.Flags().StringVar(&workflowName, "workflow", "", "show agents for a workflow template")
 
+	// Version command
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print version information",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("jorm %s (commit: %s, built: %s)\n", version, commit, buildDate)
+		},
+	}
+
 	// Init command (stub)
 	initCmd := &cobra.Command{
 		Use:   "init",
@@ -433,7 +449,7 @@ func main() {
 		},
 	}
 
-	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd)
+	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd, versionCmd)
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
