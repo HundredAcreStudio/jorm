@@ -75,7 +75,7 @@ func BuildValidatorContext(b *bus.Bus, clusterID string) (string, error) {
 	planMsg, err := b.FindLast(clusterID, bus.TopicPlanReady)
 	if err == nil && planMsg != nil {
 		if criteria, ok := planMsg.Data["acceptance_criteria"].(string); ok && criteria != "" {
-			sections = append(sections, "## Acceptance Criteria\n\n"+criteria)
+			sections = append(sections, "## Acceptance Criteria (from planner)\n\n"+criteria)
 		}
 	}
 

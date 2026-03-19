@@ -1,6 +1,9 @@
 package conductor
 
 import (
+	"strings"
+
+	"github.com/jorm/internal/agent"
 	"github.com/jorm/internal/bus"
 	"github.com/jorm/internal/orchestrator"
 )
@@ -48,7 +51,34 @@ func plannerAgent() orchestrator.AgentConfig {
 		MaxIterations: 1,
 		OnComplete:    []orchestrator.OnCompleteAction{{Topic: bus.TopicPlanReady}},
 		ContextBuilder: orchestrator.BuildPlannerContext,
+		ResultProcessor: func(result *agent.ClaudeResult) map[string]any {
+			if result == nil {
+				return nil
+			}
+			return map[string]any{
+				"acceptance_criteria": extractSection(result.Text, "Acceptance Criteria"),
+				"plan":               extractSection(result.Text, "Plan"),
+			}
+		},
 	}
+}
+
+// extractSection extracts the content between a "### <heading>" marker
+// and the next "###" marker (or end of text). Returns empty string if not found.
+func extractSection(text, heading string) string {
+	marker := "### " + heading
+	idx := strings.Index(text, marker)
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(marker)
+	rest := text[start:]
+	// Find the next ### heading
+	end := strings.Index(rest, "\n###")
+	if end == -1 {
+		return strings.TrimSpace(rest)
+	}
+	return strings.TrimSpace(rest[:end])
 }
 
 func workerAgent(model string, maxIter int, triggers []orchestrator.Trigger) orchestrator.AgentConfig {

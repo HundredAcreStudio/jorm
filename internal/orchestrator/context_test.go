@@ -28,7 +28,7 @@ func TestBuildValidatorContext_IncludesAcceptanceCriteria(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !contains(result, "## Acceptance Criteria") {
+	if !contains(result, "## Acceptance Criteria (from planner)") {
 		t.Error("expected output to contain '## Acceptance Criteria' section")
 	}
 	if !contains(result, "AC1: Build passes") {
@@ -71,7 +71,7 @@ func TestBuildValidatorContext_PlanWithoutCriteria(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if contains(result, "## Acceptance Criteria") {
+	if contains(result, "## Acceptance Criteria (from planner)") {
 		t.Error("expected no Acceptance Criteria section when plan has no criteria in Data")
 	}
 }
@@ -127,7 +127,7 @@ func TestBuildValidatorContext_CriteriaAndDiff(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !contains(result, "## Acceptance Criteria") {
+	if !contains(result, "## Acceptance Criteria (from planner)") {
 		t.Error("expected Acceptance Criteria section")
 	}
 	if !contains(result, "## Implementation") {
