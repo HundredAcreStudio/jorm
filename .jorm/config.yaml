@@ -62,6 +62,15 @@ validators:
     on_fail: reject
     timeout: 60s
 
+  # Claude-powered tester review (runs build/vet/test, verifies CLI, reports structured results)
+  - id: tester
+    name: Tester
+    type: claude
+    mode: review
+    prompt: "builtin:tester-review"
+    on_fail: reject
+    timeout: 300s
+
   # Claude-powered requirements validation (checks acceptance criteria with evidence)
   - id: requirements
     name: Requirements
@@ -101,15 +110,13 @@ validators:
 # Profiles: named sets of validator IDs
 profiles:
   default:
-    - build
-    - tests
+    - tester
     - requirements
     - pr-review
     - commit
 
   strict:
-    - build
-    - tests
+    - tester
     - requirements
     - vet
     - lint
