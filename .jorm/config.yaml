@@ -93,9 +93,8 @@ validators:
     name: Security Review
     type: claude
     prompt: "builtin:security-review"
-    on_fail: warn
-    timeout: 120s
-    parallel: true
+    on_fail: reject
+    timeout: 300s
 
   # Auto-commit via Claude (stages + writes conventional commit message)
   - id: commit
@@ -112,6 +111,7 @@ profiles:
   default:
     - tester
     - requirements
+    - security
     - pr-review
     - commit
 
