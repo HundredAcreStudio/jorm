@@ -531,6 +531,52 @@ func TestInjectValidators_AcceptOnlySkipped(t *testing.T) {
 	}
 }
 
+// TestInjectValidators_RequirementsReviewHasContextBuilder verifies that a claude review
+// validator with builtin:requirements-review gets ContextBuilder and ReviewMode set.
+func TestInjectValidators_RequirementsReviewHasContextBuilder(t *testing.T) {
+	cfg := &config.Config{
+		Profile: "default",
+		Validators: []config.ValidatorConfig{
+			{ID: "requirements", Name: "Requirements", Type: "claude", Mode: "review", Prompt: "builtin:requirements-review", OnFail: "reject", RunOn: "always"},
+		},
+		Profiles: map[string][]string{
+			"default": {"requirements"},
+		},
+	}
+
+	o := &Orchestrator{cfg: cfg}
+	result, err := o.injectValidators(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var found bool
+	for _, c := range result {
+		if c.ID == "validator-requirements" {
+			found = true
+			if c.ContextBuilder == nil {
+				t.Error("expected ContextBuilder to be set for requirements validator")
+			}
+			if !c.ReviewMode {
+				t.Error("expected ReviewMode=true for requirements review validator")
+			}
+			if c.ExecutionMode != "claude" {
+				t.Errorf("expected ExecutionMode=claude, got %q", c.ExecutionMode)
+			}
+			if c.Prompt != "builtin:requirements-review" {
+				t.Errorf("expected Prompt=builtin:requirements-review, got %q", c.Prompt)
+			}
+			if c.ResultProcessor == nil {
+				t.Error("expected ResultProcessor to be set")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("validator-requirements agent not found in injected configs")
+	}
+}
+
 // TestShellAgent_RunsInWorkDir verifies shell commands execute in the specified work directory.
 func TestShellAgent_RunsInWorkDir(t *testing.T) {
 	b := newTestBus(t)
