@@ -92,11 +92,65 @@ func (o *Orchestrator) Run(ctx context.Context, iss *issue.Issue, clusterID stri
 	for _, cfg := range agentConfigs {
 		a := NewAgent(cfg, o.bus, o.sink, clusterID, o.worktree.Dir, o.worktree.RepoDir, o.env)
 		agents = append(agents, a)
+
+		// Emit AgentSpawned event
+		var triggerTopics []string
+		for _, t := range cfg.Triggers {
+			triggerTopics = append(triggerTopics, t.Topic)
+		}
+		o.sink.AgentSpawned(cfg.ID, cfg.Name, triggerTopics)
 	}
+
+	// Update total agent count now that we know it
+	o.sink.UpdateTotalAgents(len(agents))
 
 	// Subscribe to CLUSTER_COMPLETE before starting agents
 	completeCh := o.bus.Subscribe(bus.TopicClusterComplete)
 	defer o.bus.Unsubscribe(bus.TopicClusterComplete, completeCh)
+
+	// Subscribe for round tracking
+	implReadyCh := o.bus.Subscribe(bus.TopicImplementationReady)
+	defer o.bus.Unsubscribe(bus.TopicImplementationReady, implReadyCh)
+	valResultCh := o.bus.Subscribe(bus.TopicValidationResult)
+	defer o.bus.Unsubscribe(bus.TopicValidationResult, valResultCh)
+
+	// Count validators for round tracking
+	validatorCount := 0
+	for _, cfg := range agentConfigs {
+		if cfg.Role == "validator" {
+			validatorCount++
+		}
+	}
+
+	// Round tracking goroutine
+	roundNum := 0
+	go func() {
+		var roundApproved, roundRejected int
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-implReadyCh:
+				roundNum++
+				roundApproved = 0
+				roundRejected = 0
+				if roundNum > 1 {
+					o.sink.RetryRoundStart(roundNum)
+				}
+				o.sink.ValidationRoundStart(roundNum)
+			case msg := <-valResultCh:
+				approved, _ := msg.Data["approved"].(bool)
+				if approved {
+					roundApproved++
+				} else {
+					roundRejected++
+				}
+				if validatorCount > 0 && (roundApproved+roundRejected) >= validatorCount {
+					o.sink.ValidationRoundComplete(roundNum, roundApproved, roundRejected)
+				}
+			}
+		}
+	}()
 
 	// Start all agents as goroutines
 	var wg sync.WaitGroup
@@ -133,7 +187,7 @@ func (o *Orchestrator) Run(ctx context.Context, iss *issue.Issue, clusterID stri
 		case msg := <-completeCh:
 			approved, _ := msg.Data["approved"].(bool)
 			if approved {
-				o.sink.Phase("Workflow completed successfully!")
+				o.sink.ClusterComplete(clusterID, "all_validators_approved")
 				cancel()
 				wg.Wait()
 				return nil

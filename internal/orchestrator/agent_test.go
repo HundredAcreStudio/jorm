@@ -30,8 +30,19 @@ func (s *fakeSink) Attempt(int, int)                        {}
 func (s *fakeSink) Cost(float64)                            {}
 func (s *fakeSink) Classification(string)                   {}
 func (s *fakeSink) LoopDone(error)                          {}
-func (s *fakeSink) AgentStateChange(string, string, string) {}
-func (s *fakeSink) MessagePublished(string, string)         {}
+func (s *fakeSink) AgentStateChange(string, string, string)          {}
+func (s *fakeSink) MessagePublished(string, string)                  {}
+func (s *fakeSink) UpdateTotalAgents(int)                            {}
+func (s *fakeSink) AgentSpawned(string, string, []string)            {}
+func (s *fakeSink) AgentTriggerFired(string, string, int, string)    {}
+func (s *fakeSink) AgentTaskCompleted(string, int)                   {}
+func (s *fakeSink) AgentTaskFailed(string, int, error)               {}
+func (s *fakeSink) AgentTokenUsage(string, string, int, int)         {}
+func (s *fakeSink) ValidationRoundStart(int)                         {}
+func (s *fakeSink) ValidationRoundComplete(int, int, int)            {}
+func (s *fakeSink) RetryRoundStart(int)                              {}
+func (s *fakeSink) SystemEvent(string)                               {}
+func (s *fakeSink) ClusterComplete(string, string)                   {}
 
 func (s *fakeSink) ClaudeOutput(text string) {
 	s.mu.Lock()

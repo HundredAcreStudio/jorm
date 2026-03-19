@@ -18,11 +18,12 @@ type ClaudeResult struct {
 
 // RunOptions configures a RunClaude invocation.
 type RunOptions struct {
-	Prompt   string
-	WorkDir  string
-	Model    string
-	Env      []string          // environment for subprocess; nil uses os.Environ()
-	OnOutput func(text string) // called for each meaningful output line; nil-safe
+	Prompt    string
+	WorkDir   string
+	Model     string
+	Env       []string          // environment for subprocess; nil uses os.Environ()
+	OnOutput  func(text string) // called for each meaningful output line; nil-safe
+	OnStarted func(pid int)     // called after process starts with its PID; nil-safe
 }
 
 // streamLine is the top-level JSON object from claude --output-format stream-json.
@@ -79,6 +80,10 @@ func RunClaude(ctx context.Context, opts RunOptions) (*ClaudeResult, error) {
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting claude: %w", err)
+	}
+
+	if opts.OnStarted != nil {
+		opts.OnStarted(cmd.Process.Pid)
 	}
 
 	var text strings.Builder

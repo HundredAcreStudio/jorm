@@ -18,10 +18,11 @@ import (
 
 	"github.com/jorm/internal/config"
 	"github.com/jorm/internal/conductor"
+	"github.com/jorm/internal/events"
 	"github.com/jorm/internal/loop"
 	"github.com/jorm/internal/orchestrator"
 	"github.com/jorm/internal/store"
-	"github.com/jorm/internal/tui"
+	"github.com/jorm/internal/ui"
 )
 
 // Set via -ldflags at build time.
@@ -97,7 +98,11 @@ func main() {
 			if noTUI {
 				return loop.Run(context.Background(), opts)
 			}
-			return tui.Run(context.Background(), opts)
+			// Use new zeroshot-style scrolling UI
+			opts.SinkFactory = func(runID string, agentCount int) events.Sink {
+				return ui.New(runID, agentCount)
+			}
+			return loop.Run(context.Background(), opts)
 		},
 	}
 	runCmd.Flags().BoolVar(&worktreeFlag, "worktree", false, "create git worktree for isolation")

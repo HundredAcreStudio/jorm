@@ -20,6 +20,19 @@ type Sink interface {
 	Cost(totalCost float64)
 	Classification(classification string)
 	LoopDone(err error)
+
+	// Lifecycle events for zeroshot-style UI
+	UpdateTotalAgents(count int)
+	AgentSpawned(id, name string, triggers []string)
+	AgentTriggerFired(id, topic string, taskNum int, model string)
+	AgentTaskCompleted(id string, taskNum int)
+	AgentTaskFailed(id string, taskNum int, err error)
+	AgentTokenUsage(id, name string, input, output int)
+	ValidationRoundStart(round int)
+	ValidationRoundComplete(round, approved, rejected int)
+	RetryRoundStart(round int)
+	SystemEvent(text string)
+	ClusterComplete(runID, reason string)
 }
 
 // PrintSink writes events to stdout (non-TUI mode).
@@ -83,3 +96,16 @@ func (s *PrintSink) LoopDone(err error) {
 		fmt.Printf("%s Done!\n", pGreen("✓"))
 	}
 }
+
+// No-op implementations for lifecycle events on PrintSink.
+func (s *PrintSink) UpdateTotalAgents(count int)                                  {}
+func (s *PrintSink) AgentSpawned(id, name string, triggers []string)              {}
+func (s *PrintSink) AgentTriggerFired(id, topic string, taskNum int, model string) {}
+func (s *PrintSink) AgentTaskCompleted(id string, taskNum int)                     {}
+func (s *PrintSink) AgentTaskFailed(id string, taskNum int, err error)             {}
+func (s *PrintSink) AgentTokenUsage(id, name string, input, output int)            {}
+func (s *PrintSink) ValidationRoundStart(round int)                                {}
+func (s *PrintSink) ValidationRoundComplete(round, approved, rejected int)          {}
+func (s *PrintSink) RetryRoundStart(round int)                                     {}
+func (s *PrintSink) SystemEvent(text string)                                       {}
+func (s *PrintSink) ClusterComplete(runID, reason string)                          {}

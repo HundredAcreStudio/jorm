@@ -31,3 +31,16 @@ func (s *ProgramSink) Classification(classification string) {
 	s.P.Send(ClassificationMsg{Classification: classification})
 }
 func (s *ProgramSink) LoopDone(err error) { s.P.Send(LoopDoneMsg{Err: err}) }
+
+// No-op implementations for lifecycle events on ProgramSink.
+func (s *ProgramSink) UpdateTotalAgents(count int)                                  {}
+func (s *ProgramSink) AgentSpawned(id, name string, triggers []string)              {}
+func (s *ProgramSink) AgentTriggerFired(id, topic string, taskNum int, model string) {}
+func (s *ProgramSink) AgentTaskCompleted(id string, taskNum int)                     {}
+func (s *ProgramSink) AgentTaskFailed(id string, taskNum int, err error)             {}
+func (s *ProgramSink) AgentTokenUsage(id, name string, input, output int)            {}
+func (s *ProgramSink) ValidationRoundStart(round int)                                {}
+func (s *ProgramSink) ValidationRoundComplete(round, approved, rejected int)          {}
+func (s *ProgramSink) RetryRoundStart(round int)                                     {}
+func (s *ProgramSink) SystemEvent(text string)                                       {}
+func (s *ProgramSink) ClusterComplete(runID, reason string)                          {}

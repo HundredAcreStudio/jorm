@@ -20,19 +20,20 @@ import (
 
 // Options configures a loop run.
 type Options struct {
-	ConfigPath string
-	RepoDir    string
-	Profile    string
-	IssueID    string
-	Title      string
-	Body       string
-	Resume     bool
-	Sink       events.Sink
-	Worktree   bool   // create git worktree (default: work in current dir)
-	PR         bool   // create PR on completion (implies Worktree)
-	Ship       bool   // PR + auto-merge (implies PR)
-	Debug      bool   // enable debug logging
-	Model      string // model override
+	ConfigPath  string
+	RepoDir     string
+	Profile     string
+	IssueID     string
+	Title       string
+	Body        string
+	Resume      bool
+	Sink        events.Sink
+	SinkFactory func(runID string, agentCount int) events.Sink // creates sink after runID is known
+	Worktree    bool                                           // create git worktree (default: work in current dir)
+	PR          bool                                           // create PR on completion (implies Worktree)
+	Ship        bool                                           // PR + auto-merge (implies PR)
+	Debug       bool                                           // enable debug logging
+	Model       string                                         // model override
 }
 
 // Run orchestrates the full jorm lifecycle.
@@ -77,6 +78,11 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("counting runs for issue: %w", err)
 	}
 	runID := fmt.Sprintf("%s-%d", opts.IssueID, runCount+1)
+
+	// If a SinkFactory is provided, create the sink now that we have the runID.
+	if opts.SinkFactory != nil {
+		sink = opts.SinkFactory(runID, 0) // agentCount not known yet, will be updated
+	}
 
 	// Create structured logger
 	logger, err := jormlog.New(runID, opts.Debug)

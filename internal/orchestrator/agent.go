@@ -126,6 +126,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.setState(StateExecuting)
 		a.Iteration++
 
+		// Emit trigger fired event
+		if a.Config.ExecutionMode != "passthrough" {
+			a.sink.AgentTriggerFired(a.Config.ID, msg.Topic, a.Iteration, a.Config.Model)
+		}
+
 		// Passthrough mode: process trigger message directly without execution.
 		if a.Config.ExecutionMode == "passthrough" {
 			if a.Config.TriggerProcessor != nil {
@@ -226,6 +231,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			},
 		})
 		if err != nil {
+			a.sink.AgentTaskFailed(a.Config.ID, a.Iteration, err)
 			a.sink.ClaudeOutput(fmt.Sprintf("[%s] error: %v", a.Config.Name, err))
 			if a.Config.Role == "validator" {
 				a.sink.ValidatorDone(agent.ValidatorResult{
@@ -239,20 +245,23 @@ func (a *Agent) Run(ctx context.Context) error {
 			continue
 		}
 
+		a.sink.AgentTaskCompleted(a.Config.ID, a.Iteration)
+
 		// Accumulate cost
 		if result.Cost > 0 {
 			a.totalCost += result.Cost
 		}
 
+		// Process result once and reuse for both bus publish and validator done
+		data := make(map[string]any)
+		if a.Config.ResultProcessor != nil {
+			data = a.Config.ResultProcessor(result)
+		}
+		data["agent_id"] = a.Config.ID
+		data["iteration"] = a.Iteration
+
 		// Publish OnComplete messages
 		for _, action := range a.Config.OnComplete {
-			data := make(map[string]any)
-			if a.Config.ResultProcessor != nil {
-				data = a.Config.ResultProcessor(result)
-			}
-			data["agent_id"] = a.Config.ID
-			data["iteration"] = a.Iteration
-
 			a.bus.Publish(bus.Message{
 				ClusterID: a.clusterID,
 				Topic:     action.Topic,
@@ -265,11 +274,8 @@ func (a *Agent) Run(ctx context.Context) error {
 		// Notify TUI for validator agents after Claude completion
 		if a.Config.Role == "validator" {
 			approved := false
-			if a.Config.ResultProcessor != nil {
-				data := a.Config.ResultProcessor(result)
-				if v, ok := data["approved"].(bool); ok {
-					approved = v
-				}
+			if v, ok := data["approved"].(bool); ok {
+				approved = v
 			}
 			a.sink.ValidatorDone(agent.ValidatorResult{
 				ValidatorID: a.Config.ID,
