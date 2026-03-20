@@ -92,6 +92,7 @@ func Run(ctx context.Context, opts Options) error {
 		defer logger.Close()
 		slog.SetDefault(logger.SlogLogger())
 		logger.Info("starting run", "issue_id", opts.IssueID, "worktree", opts.Worktree, "pr", opts.PR, "ship", opts.Ship)
+		sink = jormlog.NewLogSink(sink, logger)
 	}
 
 	if opts.Resume {
@@ -229,7 +230,7 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 		if v.RunOn != "accept_only" {
 			continue
 		}
-		built, err := buildSingleValidator(v)
+		built, err := buildSingleValidator(v, subEnv)
 		if err != nil {
 			return err
 		}
@@ -284,12 +285,17 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 }
 
 // buildSingleValidator creates a single validator from config.
-func buildSingleValidator(cfg config.ValidatorConfig) (agentPkg.Validator, error) {
+func buildSingleValidator(cfg config.ValidatorConfig, env []string) (agentPkg.Validator, error) {
 	validators, err := agentPkg.BuildValidators([]config.ValidatorConfig{cfg})
 	if err != nil {
 		return nil, err
 	}
-	return validators[0], nil
+	v := validators[0]
+	// Inject env into action validators for JORM_CLOSES_REF etc.
+	if av, ok := v.(*agentPkg.ClaudeActionValidator); ok {
+		av.Env = env
+	}
+	return v, nil
 }
 
 // issueEnv appends issue context env vars to the base env.
