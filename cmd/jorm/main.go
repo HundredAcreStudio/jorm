@@ -454,7 +454,7 @@ func main() {
 		},
 	}
 
-	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd, versionCmd)
+	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd, versionCmd, newDemoCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)

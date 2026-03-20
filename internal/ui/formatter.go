@@ -12,7 +12,9 @@ type Formatter struct{}
 // FormatAgentLine left-pads the agent name to 16 chars and adds " | " separator.
 func (f *Formatter) FormatAgentLine(name, text string) string {
 	padded := fmt.Sprintf("%-16s", name)
-	return fmt.Sprintf("%s| %s", padded, text)
+	coloredName := colorAgent.Sprint(padded)
+	dimPipe := colorDim.Sprint("|")
+	return fmt.Sprintf("%s%s %s", coloredName, dimPipe, text)
 }
 
 // FormatSeparator produces a centered label in a single-line border (────).
@@ -23,7 +25,8 @@ func (f *Formatter) FormatSeparator(label string, width int) string {
 	total := width - len(label) - 2 // 2 for spaces around label
 	left := total / 2
 	right := total - left
-	return strings.Repeat("─", left) + " " + label + " " + strings.Repeat("─", right)
+	line := strings.Repeat("─", left) + " " + label + " " + strings.Repeat("─", right)
+	return colorSeparator.Sprint(line)
 }
 
 // FormatDoubleSeparator produces a centered label in a double-line border (════).
@@ -34,7 +37,23 @@ func (f *Formatter) FormatDoubleSeparator(label string, width int) string {
 	total := width - len(label) - 2
 	left := total / 2
 	right := total - left
-	return strings.Repeat("═", left) + " " + label + " " + strings.Repeat("═", right)
+	line := strings.Repeat("═", left) + " " + label + " " + strings.Repeat("═", right)
+	return colorSeparator.Sprint(line)
+}
+
+// FormatSuccess returns a green success marker with text.
+func (f *Formatter) FormatSuccess(text string) string {
+	return colorSuccess.Sprint(text)
+}
+
+// FormatFailure returns a red failure marker with text.
+func (f *Formatter) FormatFailure(text string) string {
+	return colorFailure.Sprint(text)
+}
+
+// FormatTimestamp returns a dimmed timestamp.
+func (f *Formatter) FormatTimestamp(ts string) string {
+	return colorDim.Sprint(ts)
 }
 
 // FormatRoundSummary produces a compact round result summary line.
@@ -61,16 +80,16 @@ func (f *Formatter) FormatRoundSummary(round int, results map[string]bool) strin
 	var rejected []string
 	for _, name := range names {
 		if results[name] {
-			parts = append(parts, fmt.Sprintf("✓ %s", name))
+			parts = append(parts, colorSuccess.Sprintf("✓ %s", name))
 		} else {
-			parts = append(parts, fmt.Sprintf("✗ %s", name))
+			parts = append(parts, colorFailure.Sprintf("✗ %s", name))
 			rejected = append(rejected, name)
 		}
 	}
 
 	summary := "  " + strings.Join(parts, "  ")
 	if len(rejected) > 0 {
-		summary += fmt.Sprintf("\n  → Retrying: %s found errors", strings.Join(rejected, ", "))
+		summary += colorWarning.Sprintf("\n  → Retrying: %s found errors", strings.Join(rejected, ", "))
 	}
 
 	return line + "\n" + summary

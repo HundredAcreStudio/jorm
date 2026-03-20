@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// maxFooterReserve is the number of terminal rows reserved for the footer.
+// Set once at startup, never changed. Enough for border + ~6 agents + status bar.
+const maxFooterReserve = 8
+
 // AgentRow represents one active agent in the footer.
 type AgentRow struct {
 	ID        string
@@ -17,7 +21,7 @@ type AgentRow struct {
 	Iteration int
 }
 
-// Footer manages the persistent footer using ANSI scroll regions.
+// Footer manages the persistent footer pinned to the bottom of the terminal.
 type Footer struct {
 	mu           sync.Mutex
 	runID        string
@@ -26,6 +30,7 @@ type Footer struct {
 	totalAgents  int
 	totalCost    float64
 	width        int
+	height       int // terminal rows
 	status       string
 }
 
@@ -37,6 +42,7 @@ func NewFooter(runID string, totalAgents, width int) *Footer {
 		activeAgents: make(map[string]*AgentRow),
 		totalAgents:  totalAgents,
 		width:        width,
+		height:       24,
 		status:       "running",
 	}
 }
@@ -48,14 +54,12 @@ func (f *Footer) SetTotalAgents(count int) {
 	f.totalAgents = count
 }
 
-// SetScrollRegion writes the ANSI escape to set the scroll region.
-// totalRows is the terminal height, footerHeight is how many lines the footer needs.
-func (f *Footer) SetScrollRegion(totalRows, footerHeight int) string {
-	scrollEnd := totalRows - footerHeight
-	if scrollEnd < 1 {
-		scrollEnd = 1
-	}
-	return fmt.Sprintf("\033[1;%dr", scrollEnd)
+// SetTermSize updates the terminal dimensions.
+func (f *Footer) SetTermSize(width, height int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.width = width
+	f.height = height
 }
 
 // AddAgent adds an agent row to the footer.
@@ -100,42 +104,103 @@ func (f *Footer) SetStatus(status string) {
 	f.status = status
 }
 
-// Height returns the number of lines the footer will occupy.
-func (f *Footer) Height() int {
+// Lines returns the number of lines the footer content will occupy.
+func (f *Footer) Lines() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.activeAgents) == 0 {
-		return 2 // top border + summary bar
-	}
-	return len(f.activeAgents) + 2 // top border + agent rows + summary bar
+	return f.linesLocked()
 }
 
-// Render produces the footer string with box-drawing characters.
-func (f *Footer) Render() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
+func (f *Footer) linesLocked() int {
 	if len(f.activeAgents) == 0 {
+		return 1 // just the status bar
+	}
+	n := len(f.activeAgents) + 2 // top border + agent rows + status bar
+	if n > maxFooterReserve {
+		n = maxFooterReserve
+	}
+	return n
+}
+
+// InitScrollRegion returns the escape sequence to set a fixed scroll region,
+// reserving maxFooterReserve rows at the bottom. Call once at startup.
+func InitScrollRegion(termHeight int) string {
+	scrollEnd := termHeight - maxFooterReserve
+	if scrollEnd < 1 {
+		scrollEnd = 1
+	}
+	// Set scroll region to rows 1..scrollEnd, position cursor at bottom of region
+	return fmt.Sprintf("\033[1;%dr\033[%d;1H", scrollEnd, scrollEnd)
+}
+
+// Paint renders the footer into the reserved area at the bottom of the terminal.
+// Uses absolute cursor positioning — does not modify the scroll region.
+// The entire output is a single string for atomic writing.
+func (f *Footer) Paint() string {
+	f.mu.Lock()
+	lines := f.renderLines()
+	height := f.height
+	f.mu.Unlock()
+
+	if len(lines) == 0 {
 		return ""
 	}
 
+	// Footer content is bottom-aligned within the reserved area.
+	reserveStart := height - maxFooterReserve + 1
+	if reserveStart < 1 {
+		reserveStart = 1
+	}
+	contentStart := height - len(lines) + 1
+	if contentStart < reserveStart {
+		contentStart = reserveStart
+	}
+
+	var b strings.Builder
+	b.Grow(512)
+	b.WriteString("\0337") // save cursor
+
+	// Clear the entire reserved area, then draw content lines bottom-aligned
+	for row := reserveStart; row <= height; row++ {
+		fmt.Fprintf(&b, "\033[%d;1H\033[K", row)
+	}
+	for i, line := range lines {
+		row := contentStart + i
+		fmt.Fprintf(&b, "\033[%d;1H%s", row, line)
+	}
+
+	b.WriteString("\0338") // restore cursor
+	return b.String()
+}
+
+// Render produces the footer as a single string (public, for testing).
+func (f *Footer) Render() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return strings.Join(f.renderLines(), "\n")
+}
+
+// renderLines returns each footer line as a separate string (no trailing newlines).
+func (f *Footer) renderLines() []string {
 	w := f.width
 	if w < 40 {
 		w = 40
 	}
 
-	var b strings.Builder
+	elapsed := time.Since(f.startTime).Truncate(time.Second)
 
-	// Top border: ┌─ runID ───┐
-	header := fmt.Sprintf("─ %s ", f.runID)
-	remaining := w - 2 - len(header) // 2 for ┌ and ┐
-	if remaining < 0 {
-		remaining = 0
+	// No active agents: single compact status bar
+	if len(f.activeAgents) == 0 {
+		return []string{f.renderStatusBar(elapsed, 0, 0)}
 	}
-	b.WriteString("┌")
-	b.WriteString(header)
-	b.WriteString(strings.Repeat("─", remaining))
-	b.WriteString("┐\n")
+
+	var lines []string
+
+	// Top border
+	top := colorBorder.Sprint("┌") +
+		colorBorder.Sprint(strings.Repeat("─", w-2)) +
+		colorBorder.Sprint("┐")
+	lines = append(lines, top)
 
 	// Sort agents by name for stable output
 	ids := make([]string, 0, len(f.activeAgents))
@@ -144,6 +209,12 @@ func (f *Footer) Render() string {
 	}
 	sort.Strings(ids)
 
+	// Cap agent rows to fit in reserve
+	maxAgentRows := maxFooterReserve - 2 // minus border and status bar
+	if len(ids) > maxAgentRows {
+		ids = ids[:maxAgentRows]
+	}
+
 	var totalCPU, totalRAM float64
 	for _, id := range ids {
 		row := f.activeAgents[id]
@@ -151,42 +222,75 @@ func (f *Footer) Render() string {
 		totalRAM += row.RAMMB
 
 		name := row.Name
-		if len(name) > 16 {
-			name = name[:16]
+		if len(name) > 20 {
+			name = name[:20]
 		}
-		line := fmt.Sprintf("  ● %-16s CPU: %5.1f%%  RAM: %6.1fMB  #%d",
-			name, row.CPU, row.RAMMB, row.Iteration)
-		// Pad to width
-		pad := w - 2 - len(line) // 2 for │ and │
-		if pad < 0 {
-			pad = 0
+
+		var b strings.Builder
+		b.WriteString(colorBorder.Sprint("│"))
+		b.WriteString(" ")
+		b.WriteString(colorFooterActive.Sprint("●"))
+		b.WriteString(" ")
+		b.WriteString(colorAgent.Sprintf("%-20s", name))
+
+		if row.CPU > 0 || row.RAMMB > 0 {
+			b.WriteString(colorDim.Sprintf("  cpu %5.1f%%  mem %5.0fMB", row.CPU, row.RAMMB))
 		}
-		b.WriteString("│")
-		b.WriteString(line)
-		b.WriteString(strings.Repeat(" ", pad))
-		b.WriteString("│\n")
+		if row.Iteration > 0 {
+			b.WriteString(colorDim.Sprintf("  #%d", row.Iteration))
+		}
+		lines = append(lines, b.String())
 	}
 
-	// Summary bar: └─ status │ elapsed │ active/total │ $cost │ Σ CPU RAM ─┘
-	elapsed := time.Since(f.startTime).Truncate(time.Second)
+	// Bottom status bar
+	lines = append(lines, f.renderStatusBar(elapsed, totalCPU, totalRAM))
+
+	return lines
+}
+
+func (f *Footer) renderStatusBar(elapsed time.Duration, totalCPU, totalRAM float64) string {
+	var b strings.Builder
+
 	active := len(f.activeAgents)
-	summary := fmt.Sprintf(" %s │ %s │ %d/%d active │ $%.2f │ Σ CPU:%.1f%% RAM:%.1fMB",
-		f.status, elapsed, active, f.totalAgents, f.totalCost, totalCPU, totalRAM)
-	remaining = w - 2 - len(summary) // 2 for └ and ┘
-	if remaining < 0 {
-		remaining = 0
+
+	// Build segments
+	statusIcon := colorFooterStatus.Sprint("●")
+	if f.status == "failed" {
+		statusIcon = colorFailure.Sprint("●")
 	}
-	b.WriteString("└")
-	b.WriteString(summary)
-	b.WriteString(strings.Repeat("─", remaining))
-	b.WriteString("┘")
+
+	segments := []string{
+		fmt.Sprintf(" %s %s %s",
+			statusIcon,
+			colorFooterValue.Sprint(f.runID),
+			colorFooterStatus.Sprint(f.status)),
+		colorFooterValue.Sprint(elapsed),
+		fmt.Sprintf("%s %s",
+			colorFooterActive.Sprintf("%d/%d", active, f.totalAgents),
+			colorFooterLabel.Sprint("agents")),
+		colorFooterCost.Sprintf("$%.2f", f.totalCost),
+	}
+
+	if totalCPU > 0 {
+		segments = append(segments,
+			colorDim.Sprintf("Σ cpu:%.0f%% mem:%.0fMB", totalCPU, totalRAM))
+	}
+
+	sep := colorFooterLabel.Sprint(" │ ")
+	content := strings.Join(segments, sep) + " "
+
+	if active > 0 {
+		b.WriteString(colorBorder.Sprint("└"))
+	} else {
+		b.WriteString(colorBorder.Sprint("─"))
+	}
+	b.WriteString(content)
+	b.WriteString(colorBorder.Sprint("─"))
 
 	return b.String()
 }
 
 // Clear resets the scroll region and clears the footer area.
 func (f *Footer) Clear() string {
-	// Reset scroll region to full terminal
-	// Move cursor to bottom and clear
 	return "\033[r\033[999;1H\033[J"
 }
