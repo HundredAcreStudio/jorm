@@ -123,6 +123,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		}
 
+		// Check if context was cancelled between trigger and execution
+		if ctx.Err() != nil {
+			return nil
+		}
+
 		a.setState(StateExecuting)
 		a.Iteration++
 
@@ -159,6 +164,9 @@ func (a *Agent) Run(ctx context.Context) error {
 			cmd := exec.CommandContext(ctx, "sh", "-c", a.Config.Command)
 			cmd.Dir = a.workDir
 			out, err := cmd.CombinedOutput()
+			if ctx.Err() != nil {
+				return nil
+			}
 			approved := err == nil
 
 			a.sink.ClaudeOutput(fmt.Sprintf("[%s] $ %s", a.Config.Name, a.Config.Command))
@@ -231,6 +239,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			},
 		})
 		if err != nil {
+			// If the context was cancelled (e.g. cluster completed while we were
+			// running), this is a graceful shutdown — not a failure.
+			if ctx.Err() != nil {
+				return nil
+			}
 			a.sink.AgentTaskFailed(a.Config.ID, a.Iteration, err)
 			a.sink.ClaudeOutput(fmt.Sprintf("[%s] error: %v", a.Config.Name, err))
 			if a.Config.Role == "validator" {
