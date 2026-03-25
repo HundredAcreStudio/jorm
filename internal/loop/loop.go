@@ -194,7 +194,7 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 	msgBus := bus.New(st.DB())
 
 	// Classify the issue
-	cond := conductor.New(cfg.Conductor.ClassifyModel, wt.Dir, subEnv, sink)
+	cond := conductor.New(cfg.Conductor.ClassifyModel, wt.Dir, subEnv, sink, cfg.Conductor.Staged)
 	cls, err := cond.Classify(ctx, iss)
 	if err != nil {
 		return fmt.Errorf("conductor classification: %w", err)
@@ -205,22 +205,33 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 	sink.Classification(fmt.Sprintf("%s/%s", cls.Complexity, cls.Type))
 	sink.Phase(fmt.Sprintf("Workflow: %s (%s/%s)", templateName, cls.Complexity, cls.Type))
 
-	templates := conductor.BuiltinTemplates()
-	agentConfigs, ok := templates[templateName]
-	if !ok {
-		return fmt.Errorf("unknown workflow template: %s", templateName)
+	var runErr error
+	useStaged := false
+	if cfg.Conductor.Staged {
+		stagedTemplates := conductor.BuiltinStagedTemplates()
+		if stagedTmpl, ok := stagedTemplates[templateName]; ok {
+			useStaged = true
+			so := orchestrator.NewStageOrchestrator(msgBus, cfg, wt, sink, subEnv, runState.ID, stagedTmpl.WorkerConfig, stagedTmpl.TesterConfig, stagedTmpl.Stages)
+			runErr = so.Run(ctx, iss)
+		}
 	}
-
-	// Run the orchestrator
-	orch := orchestrator.New(msgBus, cfg, wt, sink, subEnv)
-	if err := orch.Run(ctx, iss, runState.ID, agentConfigs); err != nil {
+	if !useStaged {
+		templates := conductor.BuiltinTemplates()
+		agentConfigs, ok := templates[templateName]
+		if !ok {
+			return fmt.Errorf("unknown workflow template: %s", templateName)
+		}
+		orch := orchestrator.New(msgBus, cfg, wt, sink, subEnv)
+		runErr = orch.Run(ctx, iss, runState.ID, agentConfigs)
+	}
+	if runErr != nil {
 		runState.Status = "rejected"
 		if saveErr := st.Save(runState); saveErr != nil {
-			return fmt.Errorf("saving run state: %w (original: %w)", saveErr, err)
+			return fmt.Errorf("saving run state: %w (original: %w)", saveErr, runErr)
 		}
 		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
 		hookRunner.OnFailure(ctx)
-		return err
+		return runErr
 	}
 
 	// Run accept-only validators (commit, etc.)

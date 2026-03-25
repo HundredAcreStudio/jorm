@@ -39,10 +39,11 @@ type Conductor struct {
 	workDir string
 	env     []string
 	sink    events.Sink
+	staged  bool
 }
 
 // New creates a conductor with the given model for classification.
-func New(model, workDir string, env []string, sink events.Sink) *Conductor {
+func New(model, workDir string, env []string, sink events.Sink, staged bool) *Conductor {
 	if model == "" {
 		model = "haiku"
 	}
@@ -51,6 +52,7 @@ func New(model, workDir string, env []string, sink events.Sink) *Conductor {
 		workDir: workDir,
 		env:     env,
 		sink:    sink,
+		staged:  staged,
 	}
 }
 
@@ -122,7 +124,23 @@ Respond with ONLY a JSON object, no other text:
 }
 
 // SelectTemplate returns the workflow template name for a classification.
+// When staged mode is enabled, it returns a name from BuiltinStagedTemplates.
 func (c *Conductor) SelectTemplate(cls *Classification) string {
+	if c.staged {
+		// In staged mode, non-trivial tasks use the staged full-workflow pipeline.
+		// Inquiries, debug tasks, and trivial changes fall through to standard templates.
+		switch cls.Type {
+		case Inquiry:
+			// no staged variant; fall through to standard
+		case Debug:
+			// no staged variant; fall through to standard
+		default:
+			if cls.Complexity != Trivial {
+				return "full-workflow"
+			}
+		}
+	}
+
 	switch cls.Type {
 	case Inquiry:
 		return "single-worker"
