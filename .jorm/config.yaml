@@ -14,7 +14,9 @@ profile: default
 # Conductor: multi-agent orchestration
 conductor:
   enabled: true
-  classify_model: haiku
+  classify_model: sonnet
+  staged: true
+
 
 # Issue provider: "github", "linear", or "jira"
 issue_provider: github
