@@ -208,12 +208,13 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 	var runErr error
 	useStaged := false
 	if cfg.Conductor.Staged {
-		stagedTemplates := conductor.BuiltinStagedTemplates(cfg.Model)
-		if stagedTmpl, ok := stagedTemplates[templateName]; ok {
-			useStaged = true
-			so := orchestrator.NewStageOrchestrator(msgBus, cfg, wt, sink, subEnv, runState.ID, stagedTmpl.WorkerConfig, stagedTmpl.TesterConfig, stagedTmpl.Stages)
-			runErr = so.Run(ctx, iss)
+		stagedTmpl, err := conductor.BuildStagedTemplate(cfg, cfg.Profile)
+		if err != nil {
+			return fmt.Errorf("building staged template: %w", err)
 		}
+		useStaged = true
+		so := orchestrator.NewStageOrchestrator(msgBus, cfg, wt, sink, subEnv, runState.ID, stagedTmpl.WorkerConfig, stagedTmpl.TesterConfig, stagedTmpl.Stages)
+		runErr = so.Run(ctx, iss)
 	}
 	if !useStaged {
 		templates := conductor.BuiltinTemplates(cfg.Model)

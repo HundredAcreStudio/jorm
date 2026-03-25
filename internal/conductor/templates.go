@@ -1,10 +1,12 @@
 package conductor
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/jorm/internal/agent"
 	"github.com/jorm/internal/bus"
+	"github.com/jorm/internal/config"
 	"github.com/jorm/internal/orchestrator"
 )
 
@@ -175,6 +177,117 @@ type StagedTemplate struct {
 	WorkerConfig orchestrator.AgentConfig
 	TesterConfig orchestrator.AgentConfig
 	Stages       []orchestrator.Stage
+}
+
+// BuildStagedTemplate builds a StagedTemplate from config validators for the given profile.
+// If the profile is absent or has no validators, it falls back to the builtin "full-workflow" template.
+func BuildStagedTemplate(cfg *config.Config, profile string) (StagedTemplate, error) {
+	validators, err := cfg.ValidatorsForProfile(profile)
+	if err != nil {
+		return StagedTemplate{}, fmt.Errorf("resolving profile %q: %w", profile, err)
+	}
+	if len(validators) == 0 {
+		builtin := BuiltinStagedTemplates(cfg.Model)
+		return builtin["full-workflow"], nil
+	}
+
+	model := cfg.Model
+	if model == "" {
+		model = "sonnet"
+	}
+
+	testerCfg := testerAgentConfig() // default tester
+	var stages []orchestrator.Stage
+
+	// Always prepend Planning and Test Writing stages
+	stages = append(stages,
+		orchestrator.Stage{Name: "Planning", Kind: orchestrator.StageKindAgent, AgentConfig: ptr(plannerAgent())},
+		orchestrator.Stage{Name: "Test Writing", Kind: orchestrator.StageKindAgent, AgentConfig: ptr(testWriterAgent())},
+	)
+
+	for _, v := range validators {
+		// Skip accept_only validators (commit, PR creation) — handled post-orchestrator
+		if v.RunOn == "accept_only" {
+			continue
+		}
+		// Skip claude action validators (not review stages)
+		if v.Type == "claude" && v.Mode == "action" {
+			continue
+		}
+
+		switch v.Type {
+		case "shell":
+			if v.OnFail == "reject" {
+				// Shell reject → becomes the tester config
+				testerCfg = orchestrator.AgentConfig{
+					ID:            v.ID,
+					Name:          v.Name,
+					Role:          "validator",
+					ExecutionMode: "shell",
+					Command:       v.Command,
+					Timeout:       v.Timeout,
+					OnFail:        v.OnFail,
+				}
+				if testerCfg.Name == "" {
+					testerCfg.Name = v.ID
+				}
+				if testerCfg.Command == "" {
+					testerCfg.Command = "CGO_ENABLED=1 go test ./..."
+				}
+			} else {
+				// Shell warn/ignore → non-blocking agent stage
+				agentCfg := orchestrator.AgentConfig{
+					ID:            v.ID,
+					Name:          v.Name,
+					Role:          "validator",
+					ExecutionMode: "shell",
+					Command:       v.Command,
+					Timeout:       v.Timeout,
+					OnFail:        v.OnFail,
+					MaxIterations: 1,
+				}
+				if agentCfg.Name == "" {
+					agentCfg.Name = v.ID
+				}
+				stages = append(stages, orchestrator.Stage{
+					Name:        v.Name,
+					Kind:        orchestrator.StageKindAgent,
+					AgentConfig: ptr(agentCfg),
+				})
+			}
+
+		case "claude":
+			// Claude review validator → review stage
+			reviewerModel := v.Model
+			if reviewerModel == "" {
+				reviewerModel = model
+			}
+			reviewerCfg := orchestrator.AgentConfig{
+				ID:         v.ID,
+				Name:       v.Name,
+				Role:       "validator",
+				Prompt:     v.Prompt,
+				Model:      reviewerModel,
+				ReviewMode: true,
+				OnFail:     v.OnFail,
+			}
+			if reviewerCfg.Name == "" {
+				reviewerCfg.Name = v.ID
+			}
+			stages = append(stages, orchestrator.Stage{
+				Name:           v.Name,
+				Kind:           orchestrator.StageKindReview,
+				ReviewerConfig: ptr(reviewerCfg),
+				MaxRetries:     3,
+			})
+		}
+	}
+
+	return StagedTemplate{
+		WorkerConfig: workerAgent(model, 5, nil),
+		TesterConfig: testerCfg,
+		Stages:       stages,
+	}, nil
 }
 
 // BuiltinStagedTemplates returns staged workflow templates for the StageOrchestrator.

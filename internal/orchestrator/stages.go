@@ -173,6 +173,11 @@ func (so *StageOrchestrator) runReviewStage(ctx context.Context, stageIdx int, s
 			return nil
 		}
 
+		// 3b. Warn-only reviewers: log rejection but skip the fix loop
+		if stage.ReviewerConfig.OnFail == "warn" || stage.ReviewerConfig.OnFail == "ignore" {
+			return nil
+		}
+
 		// 4. Run worker fix
 		if err := so.runWorkerFix(ctx, stageIdx, stage, reviewResult); err != nil {
 			return fmt.Errorf("worker fix: %w", err)

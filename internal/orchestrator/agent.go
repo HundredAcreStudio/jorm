@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/jorm/internal/agent"
 	"github.com/jorm/internal/agent/prompts"
@@ -60,6 +61,11 @@ type AgentConfig struct {
 	// ReviewMode when true appends the VERDICT instruction to the prompt automatically.
 	// Used for claude review validators so custom prompts don't need to include it.
 	ReviewMode bool
+	// Timeout is the per-agent execution deadline. If >0, a child context with this
+	// timeout is used for shell execution.
+	Timeout time.Duration
+	// OnFail propagates the validator's on_fail policy ("reject", "warn", "ignore").
+	OnFail string
 }
 
 // AgentResult holds the outcome of a single agent execution cycle.
@@ -221,7 +227,14 @@ func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
 			a.sink.ValidatorStart(a.Config.ID, a.Config.Name)
 		}
 
-		cmd := exec.CommandContext(ctx, "sh", "-c", a.Config.Command)
+		execCtx := ctx
+		if a.Config.Timeout > 0 {
+			var cancel context.CancelFunc
+			execCtx, cancel = context.WithTimeout(ctx, a.Config.Timeout)
+			defer cancel()
+		}
+
+		cmd := exec.CommandContext(execCtx, "sh", "-c", a.Config.Command)
 		cmd.Dir = a.workDir
 		out, err := cmd.CombinedOutput()
 		if ctx.Err() != nil {
@@ -239,12 +252,16 @@ func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
 			a.sink.ClaudeOutput(fmt.Sprintf("[%s] ✗ failed: %v", a.Config.Name, err))
 		}
 
+		onFail := a.Config.OnFail
+		if onFail == "" {
+			onFail = "reject"
+		}
 		if a.Config.Role == "validator" {
 			a.sink.ValidatorDone(agent.ValidatorResult{
 				ValidatorID: a.Config.ID,
 				Name:        a.Config.Name,
 				Passed:      approved,
-				OnFail:      "reject",
+				OnFail:      onFail,
 				Output:      string(out),
 			})
 		}

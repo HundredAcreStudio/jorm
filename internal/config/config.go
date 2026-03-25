@@ -50,6 +50,7 @@ type ValidatorConfig struct {
 	Mode     string        `yaml:"mode"`     // "review" (default) or "action"
 	Command  string        `yaml:"command"`  // for shell validators
 	Prompt   string        `yaml:"prompt"`   // for claude validators (supports "builtin:commit" etc.)
+	Model    string        `yaml:"model"`    // per-validator model override (claude validators)
 	OnFail   string        `yaml:"on_fail"`  // "reject", "warn", "ignore"
 	RunOn    string        `yaml:"run_on"`   // "always", "accept_only", "reject_only"
 	Parallel bool          `yaml:"parallel"`
