@@ -62,19 +62,28 @@ type AgentConfig struct {
 	ReviewMode bool
 }
 
+// AgentResult holds the outcome of a single agent execution cycle.
+type AgentResult struct {
+	Output   string
+	Approved bool           // For validators: whether the review passed
+	Cost     float64
+	Data     map[string]any // Full ResultProcessor output
+}
+
 // Agent is a running instance of an AgentConfig.
 type Agent struct {
 	Config    AgentConfig
 	State     AgentState
 	Iteration int
 
-	bus       *bus.Bus
-	sink      events.Sink
-	clusterID string
-	workDir   string
-	repoDir   string
-	env       []string
-	totalCost float64
+	bus         *bus.Bus
+	sink        events.Sink
+	clusterID   string
+	workDir     string
+	repoDir     string
+	env         []string
+	totalCost   float64
+	lastTrigger bus.Message // set by Run() before ExecuteOnce() to pass trigger context
 }
 
 // TotalCost returns the accumulated cost from all Claude invocations by this agent.
@@ -128,16 +137,20 @@ func (a *Agent) Run(ctx context.Context) error {
 			return nil
 		}
 
-		a.setState(StateExecuting)
-		a.Iteration++
+		// Store trigger message so ExecuteOnce can access it
+		a.lastTrigger = msg
 
-		// Emit trigger fired event
-		if a.Config.ExecutionMode != "passthrough" {
-			a.sink.AgentTriggerFired(a.Config.ID, msg.Topic, a.Iteration, a.Config.Model)
+		result, err := a.ExecuteOnce(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			continue
 		}
 
-		// Passthrough mode: process trigger message directly without execution.
-		if a.Config.ExecutionMode == "passthrough" {
+		// Publish OnComplete messages based on execution mode
+		switch a.Config.ExecutionMode {
+		case "passthrough":
 			if a.Config.TriggerProcessor != nil {
 				data, shouldPublish := a.Config.TriggerProcessor(msg)
 				if shouldPublish {
@@ -152,153 +165,173 @@ func (a *Agent) Run(ctx context.Context) error {
 					}
 				}
 			}
-			continue
-		}
-
-		// Shell mode: execute command directly, check exit code.
-		if a.Config.ExecutionMode == "shell" {
-			if a.Config.Role == "validator" {
-				a.sink.ValidatorStart(a.Config.ID, a.Config.Name)
-			}
-
-			cmd := exec.CommandContext(ctx, "sh", "-c", a.Config.Command)
-			cmd.Dir = a.workDir
-			out, err := cmd.CombinedOutput()
-			if ctx.Err() != nil {
-				return nil
-			}
-			approved := err == nil
-
-			a.sink.ClaudeOutput(fmt.Sprintf("[%s] $ %s", a.Config.Name, a.Config.Command))
-			if len(out) > 0 {
-				a.sink.ClaudeOutput(fmt.Sprintf("[%s] %s", a.Config.Name, string(out)))
-			}
-			if approved {
-				a.sink.ClaudeOutput(fmt.Sprintf("[%s] ✓ passed", a.Config.Name))
-			} else {
-				a.sink.ClaudeOutput(fmt.Sprintf("[%s] ✗ failed: %v", a.Config.Name, err))
-			}
-
+		case "shell":
 			for _, action := range a.Config.OnComplete {
 				a.bus.Publish(bus.Message{
 					ClusterID: a.clusterID,
 					Topic:     action.Topic,
 					Sender:    a.Config.ID,
-					Content:   string(out),
+					Content:   result.Output,
 					Data: map[string]any{
-						"approved":     approved,
+						"approved":     result.Approved,
 						"validator_id": a.Config.ID,
 						"agent_id":     a.Config.ID,
 						"iteration":    a.Iteration,
 					},
 				})
 			}
-
-			if a.Config.Role == "validator" {
-				a.sink.ValidatorDone(agent.ValidatorResult{
-					ValidatorID: a.Config.ID,
-					Name:        a.Config.Name,
-					Passed:      approved,
-					OnFail:      "reject",
-					Output:      string(out),
+		default: // claude
+			data := map[string]any{
+				"agent_id":  a.Config.ID,
+				"iteration": a.Iteration,
+			}
+			for k, v := range result.Data {
+				data[k] = v
+			}
+			for _, action := range a.Config.OnComplete {
+				a.bus.Publish(bus.Message{
+					ClusterID: a.clusterID,
+					Topic:     action.Topic,
+					Sender:    a.Config.ID,
+					Content:   result.Output,
+					Data:      data,
 				})
 			}
-			continue
 		}
+	}
+}
 
-		// Claude mode (default): build prompt and run Claude.
-		a.setState(StateBuildingContext)
-		prompt, err := a.buildPrompt()
-		if err != nil {
-			a.sink.ClaudeOutput(fmt.Sprintf("[%s] prompt error: %v", a.Config.Name, err))
-			continue
-		}
+// ExecuteOnce runs the agent's execution cycle exactly once (no trigger loop).
+// Used by StageOrchestrator to run agents synchronously.
+// Run() sets a.lastTrigger before calling this so trigger context is available.
+func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
+	a.setState(StateExecuting)
+	a.Iteration++
 
-		if msg.Content != "" {
-			prompt = prompt + "\n\n## Context from " + msg.Topic + "\n\n" + msg.Content
-		}
+	// Passthrough mode is driven by trigger messages; no synchronous execution body.
+	if a.Config.ExecutionMode == "passthrough" {
+		return &AgentResult{}, nil
+	}
 
-		// For review-mode validators, append the verdict instruction
-		if a.Config.ReviewMode {
-			prompt = prompt + "\n\nEnd your response with exactly \"VERDICT: ACCEPT\" or \"VERDICT: REJECT\" followed by a brief reason."
-		}
+	a.sink.AgentTriggerFired(a.Config.ID, a.lastTrigger.Topic, a.Iteration, a.Config.Model)
 
-		a.setState(StateExecuting)
-
+	// Shell mode: execute command directly, check exit code.
+	if a.Config.ExecutionMode == "shell" {
 		if a.Config.Role == "validator" {
 			a.sink.ValidatorStart(a.Config.ID, a.Config.Name)
 		}
 
-		result, err := agent.RunClaude(ctx, agent.RunOptions{
-			Prompt:  prompt,
-			WorkDir: a.workDir,
-			Model:   a.Config.Model,
-			Env:     a.env,
-			OnOutput: func(text string) {
-				a.sink.ClaudeOutput(fmt.Sprintf("[%s] %s", a.Config.Name, text))
-			},
-		})
-		if err != nil {
-			// If the context was cancelled (e.g. cluster completed while we were
-			// running), this is a graceful shutdown — not a failure.
-			if ctx.Err() != nil {
-				return nil
-			}
-			a.sink.AgentTaskFailed(a.Config.ID, a.Iteration, err)
-			a.sink.ClaudeOutput(fmt.Sprintf("[%s] error: %v", a.Config.Name, err))
-			if a.Config.Role == "validator" {
-				a.sink.ValidatorDone(agent.ValidatorResult{
-					ValidatorID: a.Config.ID,
-					Name:        a.Config.Name,
-					Passed:      false,
-					OnFail:      "reject",
-					Output:      fmt.Sprintf("error: %v", err),
-				})
-			}
-			continue
+		cmd := exec.CommandContext(ctx, "sh", "-c", a.Config.Command)
+		cmd.Dir = a.workDir
+		out, err := cmd.CombinedOutput()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		approved := err == nil
+
+		a.sink.ClaudeOutput(fmt.Sprintf("[%s] $ %s", a.Config.Name, a.Config.Command))
+		if len(out) > 0 {
+			a.sink.ClaudeOutput(fmt.Sprintf("[%s] %s", a.Config.Name, string(out)))
+		}
+		if approved {
+			a.sink.ClaudeOutput(fmt.Sprintf("[%s] ✓ passed", a.Config.Name))
+		} else {
+			a.sink.ClaudeOutput(fmt.Sprintf("[%s] ✗ failed: %v", a.Config.Name, err))
 		}
 
-		a.sink.AgentTaskCompleted(a.Config.ID, a.Iteration)
-
-		// Accumulate cost
-		if result.Cost > 0 {
-			a.totalCost += result.Cost
-		}
-
-		// Process result once and reuse for both bus publish and validator done
-		data := make(map[string]any)
-		if a.Config.ResultProcessor != nil {
-			data = a.Config.ResultProcessor(result)
-		}
-		data["agent_id"] = a.Config.ID
-		data["iteration"] = a.Iteration
-
-		// Publish OnComplete messages
-		for _, action := range a.Config.OnComplete {
-			a.bus.Publish(bus.Message{
-				ClusterID: a.clusterID,
-				Topic:     action.Topic,
-				Sender:    a.Config.ID,
-				Content:   result.Text,
-				Data:      data,
-			})
-		}
-
-		// Notify TUI for validator agents after Claude completion
 		if a.Config.Role == "validator" {
-			approved := false
-			if v, ok := data["approved"].(bool); ok {
-				approved = v
-			}
 			a.sink.ValidatorDone(agent.ValidatorResult{
 				ValidatorID: a.Config.ID,
 				Name:        a.Config.Name,
 				Passed:      approved,
 				OnFail:      "reject",
-				Output:      result.Text,
+				Output:      string(out),
 			})
 		}
+
+		return &AgentResult{Output: string(out), Approved: approved}, nil
 	}
+
+	// Claude mode (default): build prompt and run Claude.
+	a.setState(StateBuildingContext)
+	prompt, err := a.buildPrompt()
+	if err != nil {
+		a.sink.ClaudeOutput(fmt.Sprintf("[%s] prompt error: %v", a.Config.Name, err))
+		return nil, fmt.Errorf("building prompt: %w", err)
+	}
+
+	if a.lastTrigger.Content != "" {
+		prompt = prompt + "\n\n## Context from " + a.lastTrigger.Topic + "\n\n" + a.lastTrigger.Content
+	}
+
+	// For review-mode validators, append the verdict instruction.
+	if a.Config.ReviewMode {
+		prompt = prompt + "\n\nEnd your response with exactly \"VERDICT: ACCEPT\" or \"VERDICT: REJECT\" followed by a brief reason."
+	}
+
+	a.setState(StateExecuting)
+
+	if a.Config.Role == "validator" {
+		a.sink.ValidatorStart(a.Config.ID, a.Config.Name)
+	}
+
+	result, err := agent.RunClaude(ctx, agent.RunOptions{
+		Prompt:  prompt,
+		WorkDir: a.workDir,
+		Model:   a.Config.Model,
+		Env:     a.env,
+		OnOutput: func(text string) {
+			a.sink.ClaudeOutput(fmt.Sprintf("[%s] %s", a.Config.Name, text))
+		},
+	})
+	if err != nil {
+		// If the context was cancelled (e.g. cluster completed while we were
+		// running), this is a graceful shutdown — not a failure.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		a.sink.AgentTaskFailed(a.Config.ID, a.Iteration, err)
+		a.sink.ClaudeOutput(fmt.Sprintf("[%s] error: %v", a.Config.Name, err))
+		if a.Config.Role == "validator" {
+			a.sink.ValidatorDone(agent.ValidatorResult{
+				ValidatorID: a.Config.ID,
+				Name:        a.Config.Name,
+				Passed:      false,
+				OnFail:      "reject",
+				Output:      fmt.Sprintf("error: %v", err),
+			})
+		}
+		return nil, err
+	}
+
+	a.sink.AgentTaskCompleted(a.Config.ID, a.Iteration)
+
+	// Accumulate cost
+	if result.Cost > 0 {
+		a.totalCost += result.Cost
+	}
+
+	// Process result data and determine approved status
+	var data map[string]any
+	approved := false
+	if a.Config.ResultProcessor != nil {
+		data = a.Config.ResultProcessor(result)
+		if v, ok := data["approved"].(bool); ok {
+			approved = v
+		}
+	}
+
+	if a.Config.Role == "validator" {
+		a.sink.ValidatorDone(agent.ValidatorResult{
+			ValidatorID: a.Config.ID,
+			Name:        a.Config.Name,
+			Passed:      approved,
+			OnFail:      "reject",
+			Output:      result.Text,
+		})
+	}
+
+	return &AgentResult{Output: result.Text, Approved: approved, Cost: result.Cost, Data: data}, nil
 }
 
 // waitForTrigger blocks until a message matches one of the agent's triggers.
