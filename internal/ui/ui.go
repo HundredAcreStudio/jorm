@@ -308,3 +308,6 @@ func (u *UI) ClusterComplete(runID, reason string) {
 	u.printLine(u.formatter.FormatDoubleSeparator("", u.termWidth))
 	u.printLine("")
 }
+
+func (u *UI) StageStarted(stageIndex int, stageName string)   {}
+func (u *UI) StageCompleted(stageIndex int, stageName string) {}

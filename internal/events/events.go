@@ -33,6 +33,8 @@ type Sink interface {
 	RetryRoundStart(round int)
 	SystemEvent(text string)
 	ClusterComplete(runID, reason string)
+	StageStarted(stageIndex int, stageName string)
+	StageCompleted(stageIndex int, stageName string)
 }
 
 // PrintSink writes events to stdout (non-TUI mode).
@@ -109,3 +111,5 @@ func (s *PrintSink) ValidationRoundComplete(round, approved, rejected int)      
 func (s *PrintSink) RetryRoundStart(round int)                                     {}
 func (s *PrintSink) SystemEvent(text string)                                       {}
 func (s *PrintSink) ClusterComplete(runID, reason string)                          {}
+func (s *PrintSink) StageStarted(stageIndex int, stageName string)                 {}
+func (s *PrintSink) StageCompleted(stageIndex int, stageName string)               {}

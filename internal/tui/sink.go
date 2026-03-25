@@ -44,3 +44,5 @@ func (s *ProgramSink) ValidationRoundComplete(round, approved, rejected int)    
 func (s *ProgramSink) RetryRoundStart(round int)                                     {}
 func (s *ProgramSink) SystemEvent(text string)                                       {}
 func (s *ProgramSink) ClusterComplete(runID, reason string)                          {}
+func (s *ProgramSink) StageStarted(stageIndex int, stageName string)                 {}
+func (s *ProgramSink) StageCompleted(stageIndex int, stageName string)               {}

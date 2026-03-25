@@ -43,6 +43,8 @@ func (s *fakeSink) ValidationRoundComplete(int, int, int)            {}
 func (s *fakeSink) RetryRoundStart(int)                              {}
 func (s *fakeSink) SystemEvent(string)                               {}
 func (s *fakeSink) ClusterComplete(string, string)                   {}
+func (s *fakeSink) StageStarted(int, string)                         {}
+func (s *fakeSink) StageCompleted(int, string)                       {}
 
 func (s *fakeSink) ClaudeOutput(text string) {
 	s.mu.Lock()

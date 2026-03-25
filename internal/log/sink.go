@@ -143,3 +143,13 @@ func (l *LogSink) ClusterComplete(runID, reason string) {
 	l.logger.Info("cluster.complete", "run_id", runID, "reason", reason)
 	l.inner.ClusterComplete(runID, reason)
 }
+
+func (l *LogSink) StageStarted(stageIndex int, stageName string) {
+	l.logger.Info("stage.started", "stage_index", stageIndex, "stage", stageName)
+	l.inner.StageStarted(stageIndex, stageName)
+}
+
+func (l *LogSink) StageCompleted(stageIndex int, stageName string) {
+	l.logger.Info("stage.completed", "stage_index", stageIndex, "stage", stageName)
+	l.inner.StageCompleted(stageIndex, stageName)
+}

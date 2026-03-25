@@ -81,6 +81,8 @@ func (m *mockSink) SystemEvent(text string)   { m.systemEvents = append(m.system
 func (m *mockSink) ClusterComplete(runID, reason string) {
 	m.clusterCompletes = append(m.clusterCompletes, [2]string{runID, reason})
 }
+func (m *mockSink) StageStarted(stageIndex int, stageName string)   {}
+func (m *mockSink) StageCompleted(stageIndex int, stageName string) {}
 
 // newTempLogger creates a Logger backed by a temp file for tests.
 func newTempLogger(t *testing.T) *Logger {
