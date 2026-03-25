@@ -141,9 +141,10 @@ func (v *ClaudeActionValidator) Validate(ctx context.Context, diff, workDir, rep
 	}
 
 	// Inject closes reference from env if available
+	const closesPrefix = "JORM_CLOSES_REF="
 	for _, e := range v.Env {
-		if len(e) > 17 && e[:17] == "JORM_CLOSES_REF=" {
-			ref := e[17:]
+		if strings.HasPrefix(e, closesPrefix) {
+			ref := e[len(closesPrefix):]
 			if ref != "" {
 				promptText = promptText + "\n\nIMPORTANT: Include \"" + ref + "\" on its own line in the commit message, before the Co-Authored-By line."
 			}
