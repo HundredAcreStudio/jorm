@@ -88,6 +88,84 @@ func BuildValidatorContext(b *bus.Bus, clusterID string) (string, error) {
 	return strings.Join(sections, "\n\n"), nil
 }
 
+// BuildTestWriterContext assembles context for the test-writer agent:
+// issue + plan (no validation feedback — tests are written before implementation).
+func BuildTestWriterContext(b *bus.Bus, clusterID string) (string, error) {
+	var sections []string
+
+	issueMsgs, err := b.Query(clusterID, bus.QueryOpts{
+		Topics: []string{bus.TopicIssueOpened},
+		Limit:  1,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(issueMsgs) > 0 {
+		sections = append(sections, "## Issue\n\n"+issueMsgs[0].Content)
+	}
+
+	planMsg, err := b.FindLast(clusterID, bus.TopicPlanReady)
+	if err == nil && planMsg != nil {
+		sections = append(sections, "## Plan\n\n"+planMsg.Content)
+	}
+
+	return strings.Join(sections, "\n\n"), nil
+}
+
+// BuildStageScopedWorkerContext assembles worker context with rejection feedback
+// scoped to the current stage only (identified by stageIndex in Data["stage_index"]).
+// Feedback from prior stages (already addressed and accepted) is excluded.
+func BuildStageScopedWorkerContext(b *bus.Bus, clusterID string, stageIndex int, stageName string) (string, error) {
+	var sections []string
+
+	issueMsgs, err := b.Query(clusterID, bus.QueryOpts{
+		Topics: []string{bus.TopicIssueOpened},
+		Limit:  1,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(issueMsgs) > 0 {
+		sections = append(sections, "## Issue\n\n"+issueMsgs[0].Content)
+	}
+
+	planMsg, err := b.FindLast(clusterID, bus.TopicPlanReady)
+	if err == nil && planMsg != nil {
+		sections = append(sections, "## Implementation Plan\n\n"+planMsg.Content)
+	}
+
+	rejections, err := b.Query(clusterID, bus.QueryOpts{
+		Topics: []string{bus.TopicValidationResult},
+	})
+	if err == nil {
+		var findings []string
+		for _, r := range rejections {
+			approved, _ := r.Data["approved"].(bool)
+			if approved || r.Content == "" {
+				continue
+			}
+			idx, ok := r.Data["stage_index"].(int)
+			if !ok {
+				// Try float64 (JSON numbers unmarshal as float64)
+				if f, ok2 := r.Data["stage_index"].(float64); ok2 {
+					idx = int(f)
+					ok = true
+				}
+			}
+			if ok && idx != stageIndex {
+				continue
+			}
+			findings = append(findings, fmt.Sprintf("### Validator: %s\n%s", r.Sender, r.Content))
+		}
+		if len(findings) > 0 {
+			header := "## Previous attempt was rejected. Fix these issues:\n\n"
+			sections = append(sections, header+strings.Join(findings, "\n\n"))
+		}
+	}
+
+	return strings.Join(sections, "\n\n"), nil
+}
+
 // BuildCompletionContext assembles context for the completion detector:
 // all validation results.
 func BuildCompletionContext(b *bus.Bus, clusterID string) (string, error) {

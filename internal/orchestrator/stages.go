@@ -157,14 +157,16 @@ func (so *StageOrchestrator) runReviewStage(ctx context.Context, stageIdx int, s
 		so.bus.Publish(bus.Message{
 			ClusterID: so.clusterID,
 			Topic:     bus.TopicValidationResult,
-			Sender:    "stage_orchestrator",
+			Sender:    stage.ReviewerConfig.ID,
+			Content:   reviewResult.Output,
 			Data: map[string]any{
 				"approved":     reviewResult.Approved,
 				"validator_id": stage.ReviewerConfig.ID,
+				"stage_index":  stageIdx,
 				"stage":        stage.Name,
 			},
 		})
-		so.sink.MessagePublished(bus.TopicValidationResult, "stage_orchestrator")
+		so.sink.MessagePublished(bus.TopicValidationResult, stage.ReviewerConfig.ID)
 
 		// 3. Approved → done
 		if reviewResult.Approved {

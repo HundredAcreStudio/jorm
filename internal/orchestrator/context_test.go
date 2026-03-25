@@ -140,3 +140,191 @@ func TestBuildValidatorContext_CriteriaAndDiff(t *testing.T) {
 		t.Error("expected diff text in output")
 	}
 }
+
+func TestBuildTestWriterContext_IssueAndPlan(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicIssueOpened,
+		Sender:    "provider",
+		Content:   "Fix the login bug",
+		Data:      map[string]any{},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicPlanReady,
+		Sender:    "planner",
+		Content:   "Step 1: do this",
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildTestWriterContext(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, "## Issue") {
+		t.Error("expected '## Issue' section")
+	}
+	if !contains(result, "Fix the login bug") {
+		t.Error("expected issue content")
+	}
+	if !contains(result, "## Plan") {
+		t.Error("expected '## Plan' section")
+	}
+	if !contains(result, "Step 1: do this") {
+		t.Error("expected plan content")
+	}
+}
+
+func TestBuildTestWriterContext_NoPlan(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicIssueOpened,
+		Sender:    "provider",
+		Content:   "Some issue",
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildTestWriterContext(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, "## Issue") {
+		t.Error("expected '## Issue' section")
+	}
+	if contains(result, "## Plan") {
+		t.Error("expected no '## Plan' section when plan not published")
+	}
+}
+
+func TestBuildStageScopedWorkerContext_FiltersOtherStages(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicIssueOpened,
+		Sender:    "provider",
+		Content:   "Issue content",
+		Data:      map[string]any{},
+	})
+
+	// Rejection from stage 0 (should be excluded when querying stage 1)
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "stage0-reviewer",
+		Content:   "Stage 0 rejection",
+		Data:      map[string]any{"approved": false, "stage_index": 0},
+	})
+
+	// Rejection from stage 1 (should be included)
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "stage1-reviewer",
+		Content:   "Stage 1 rejection",
+		Data:      map[string]any{"approved": false, "stage_index": 1},
+	})
+
+	result, err := BuildStageScopedWorkerContext(b, clusterID, 1, "impl")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contains(result, "Stage 0 rejection") {
+		t.Error("expected stage 0 rejection to be excluded")
+	}
+	if !contains(result, "Stage 1 rejection") {
+		t.Error("expected stage 1 rejection to be included")
+	}
+}
+
+func TestBuildStageScopedWorkerContext_NoRejections(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicIssueOpened,
+		Sender:    "provider",
+		Content:   "Issue content",
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildStageScopedWorkerContext(b, clusterID, 0, "tests")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contains(result, "## Previous attempt") {
+		t.Error("expected no rejection section when no rejections exist")
+	}
+	if !contains(result, "## Issue") {
+		t.Error("expected '## Issue' section")
+	}
+}
+
+func TestBuildStageScopedWorkerContext_ExcludesApproved(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicIssueOpened,
+		Sender:    "provider",
+		Content:   "Issue",
+		Data:      map[string]any{},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "reviewer",
+		Content:   "Looks good",
+		Data:      map[string]any{"approved": true, "stage_index": 0},
+	})
+
+	result, err := BuildStageScopedWorkerContext(b, clusterID, 0, "tests")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contains(result, "## Previous attempt") {
+		t.Error("expected no rejection section for approved validation")
+	}
+}
+
+func TestBuildStageScopedWorkerContext_Float64StageIndex(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicIssueOpened,
+		Sender:    "provider",
+		Content:   "Issue",
+		Data:      map[string]any{},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "reviewer",
+		Content:   "Rejection via JSON",
+		Data:      map[string]any{"approved": false, "stage_index": float64(1)},
+	})
+
+	result, err := BuildStageScopedWorkerContext(b, clusterID, 1, "review")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !contains(result, "Rejection via JSON") {
+		t.Error("expected float64 stage_index to match")
+	}
+}
