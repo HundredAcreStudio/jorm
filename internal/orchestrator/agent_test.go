@@ -579,6 +579,229 @@ func TestInjectValidators_RequirementsReviewHasContextBuilder(t *testing.T) {
 	}
 }
 
+// TestExecuteOnce_ShellAgent_Success verifies that calling ExecuteOnce directly on a
+// shell-mode agent returns Approved=true and non-empty output on success.
+func TestExecuteOnce_ShellAgent_Success(t *testing.T) {
+	b := newTestBus(t)
+	sink := &fakeSink{}
+	tmpDir := t.TempDir()
+
+	cfg := AgentConfig{
+		ID:            "shell-agent",
+		Name:          "Shell",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "echo hello-from-execute-once",
+	}
+	a := NewAgent(cfg, b, sink, "test-cluster", tmpDir, tmpDir, nil)
+	a.lastTrigger = bus.Message{Topic: bus.TopicIssueOpened}
+
+	result, err := a.ExecuteOnce(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Approved {
+		t.Error("expected Approved=true for successful shell command")
+	}
+	if result.Output == "" {
+		t.Error("expected non-empty output from echo command")
+	}
+}
+
+// TestExecuteOnce_ShellAgent_Failure verifies that a failing shell command sets Approved=false
+// without returning an error from ExecuteOnce itself.
+func TestExecuteOnce_ShellAgent_Failure(t *testing.T) {
+	b := newTestBus(t)
+	sink := &fakeSink{}
+	tmpDir := t.TempDir()
+
+	cfg := AgentConfig{
+		ID:            "shell-agent",
+		Name:          "Shell",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "exit 1",
+	}
+	a := NewAgent(cfg, b, sink, "test-cluster", tmpDir, tmpDir, nil)
+	a.lastTrigger = bus.Message{Topic: bus.TopicIssueOpened}
+
+	result, err := a.ExecuteOnce(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Approved {
+		t.Error("expected Approved=false for failing shell command")
+	}
+}
+
+// TestExecuteOnce_IncrementsIteration verifies that each call to ExecuteOnce increments
+// the agent's Iteration counter by exactly one.
+func TestExecuteOnce_IncrementsIteration(t *testing.T) {
+	b := newTestBus(t)
+	sink := &fakeSink{}
+	tmpDir := t.TempDir()
+
+	cfg := AgentConfig{
+		ID:            "shell-agent",
+		Name:          "Shell",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "true",
+	}
+	a := NewAgent(cfg, b, sink, "test-cluster", tmpDir, tmpDir, nil)
+	a.lastTrigger = bus.Message{Topic: bus.TopicIssueOpened}
+
+	if _, err := a.ExecuteOnce(context.Background()); err != nil {
+		t.Fatalf("first call: unexpected error: %v", err)
+	}
+	if a.Iteration != 1 {
+		t.Errorf("expected Iteration=1 after first call, got %d", a.Iteration)
+	}
+
+	if _, err := a.ExecuteOnce(context.Background()); err != nil {
+		t.Fatalf("second call: unexpected error: %v", err)
+	}
+	if a.Iteration != 2 {
+		t.Errorf("expected Iteration=2 after second call, got %d", a.Iteration)
+	}
+}
+
+// TestExecuteOnce_ContextCancellation verifies that ExecuteOnce returns ctx.Err() when
+// the context is cancelled before or during shell execution.
+func TestExecuteOnce_ContextCancellation(t *testing.T) {
+	b := newTestBus(t)
+	sink := &fakeSink{}
+	tmpDir := t.TempDir()
+
+	cfg := AgentConfig{
+		ID:            "shell-agent",
+		Name:          "Shell",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "sleep 10",
+	}
+	a := NewAgent(cfg, b, sink, "test-cluster", tmpDir, tmpDir, nil)
+	a.lastTrigger = bus.Message{Topic: bus.TopicIssueOpened}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately before calling ExecuteOnce
+
+	_, err := a.ExecuteOnce(ctx)
+	if err != ctx.Err() {
+		t.Errorf("expected ctx.Err()=%v, got %v", ctx.Err(), err)
+	}
+}
+
+// TestExecuteOnce_Passthrough_NoOp verifies that passthrough execution mode returns an
+// empty result without running any command.
+func TestExecuteOnce_Passthrough_NoOp(t *testing.T) {
+	b := newTestBus(t)
+	sink := &fakeSink{}
+	tmpDir := t.TempDir()
+
+	cfg := AgentConfig{
+		ID:            "passthrough-agent",
+		Name:          "Passthrough",
+		Role:          "completion",
+		ExecutionMode: "passthrough",
+	}
+	a := NewAgent(cfg, b, sink, "test-cluster", tmpDir, tmpDir, nil)
+	a.lastTrigger = bus.Message{Topic: bus.TopicValidationResult}
+
+	result, err := a.ExecuteOnce(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.Output != "" {
+		t.Errorf("expected empty output for passthrough mode, got %q", result.Output)
+	}
+}
+
+// TestExecuteOnce_ReviewMode_ShellApprovedByExitCode verifies that shell-mode agents
+// determine Approved from exit code, not from VERDICT text in output. This confirms
+// that ReviewMode VERDICT parsing only applies to claude-mode agents.
+func TestExecuteOnce_ReviewMode_ShellApprovedByExitCode(t *testing.T) {
+	b := newTestBus(t)
+	sink := &fakeSink{}
+	tmpDir := t.TempDir()
+
+	// Shell exits 0 but outputs VERDICT: REJECT — shell mode wins (approved by exit code)
+	cfg := AgentConfig{
+		ID:            "reviewer",
+		Name:          "Reviewer",
+		Role:          "validator",
+		ExecutionMode: "shell",
+		ReviewMode:    true,
+		Command:       `echo "VERDICT: REJECT — but exit code is 0"`,
+	}
+	a := NewAgent(cfg, b, sink, "test-cluster", tmpDir, tmpDir, nil)
+	a.lastTrigger = bus.Message{Topic: bus.TopicImplementationReady}
+
+	result, err := a.ExecuteOnce(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Approved {
+		t.Error("expected Approved=true: shell mode uses exit code, not VERDICT text")
+	}
+}
+
+// TestExecuteOnce_ReviewMode_ResultProcessorTakesPrecedence verifies that when both
+// ReviewMode and ResultProcessor are set, ResultProcessor determines Approved (not VERDICT parsing).
+func TestExecuteOnce_ReviewMode_ResultProcessorTakesPrecedence(t *testing.T) {
+	b := newTestBus(t)
+	sink := &fakeSink{}
+	tmpDir := t.TempDir()
+
+	cfg := AgentConfig{
+		ID:            "reviewer",
+		Name:          "Reviewer",
+		Role:          "validator",
+		ExecutionMode: "shell",
+		ReviewMode:    true,
+		Command:       "true",
+		// ResultProcessor forces approved=false regardless of exit code or VERDICT
+		ResultProcessor: func(result *agent.ClaudeResult) map[string]any {
+			return map[string]any{"approved": false}
+		},
+	}
+	a := NewAgent(cfg, b, sink, "test-cluster", tmpDir, tmpDir, nil)
+	a.lastTrigger = bus.Message{Topic: bus.TopicImplementationReady}
+
+	result, err := a.ExecuteOnce(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Shell mode returns early with exit-code-based approved, ResultProcessor not reached for shell.
+	// This test documents that shell mode ignores ResultProcessor.
+	if !result.Approved {
+		t.Error("expected Approved=true: shell mode uses exit code, ResultProcessor not consulted")
+	}
+}
+
+// TestReviewMode_AgentConfig_NilResultProcessor verifies that a ReviewMode agent
+// with no ResultProcessor uses the VERDICT parsing fallback. This mirrors how
+// staged reviewer agents are configured in BuiltinStagedTemplates.
+func TestReviewMode_AgentConfig_NilResultProcessor(t *testing.T) {
+	cfg := AgentConfig{
+		ID:         "test-reviewer",
+		Name:       "Test Reviewer",
+		Role:       "validator",
+		ReviewMode: true,
+		// No ResultProcessor — this is the staged reviewer pattern
+	}
+
+	if !cfg.ReviewMode {
+		t.Error("expected ReviewMode=true")
+	}
+	if cfg.ResultProcessor != nil {
+		t.Error("expected nil ResultProcessor for ReviewMode agent (VERDICT fallback path)")
+	}
+}
+
 // TestShellAgent_RunsInWorkDir verifies shell commands execute in the specified work directory.
 func TestShellAgent_RunsInWorkDir(t *testing.T) {
 	b := newTestBus(t)

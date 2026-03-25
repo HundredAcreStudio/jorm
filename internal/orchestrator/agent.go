@@ -319,6 +319,9 @@ func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
 		if v, ok := data["approved"].(bool); ok {
 			approved = v
 		}
+	} else if a.Config.ReviewMode {
+		// ReviewMode agents without a ResultProcessor: check VERDICT in output
+		approved = strings.Contains(result.Text, "VERDICT: ACCEPT")
 	}
 
 	if a.Config.Role == "validator" {
