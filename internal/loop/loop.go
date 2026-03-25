@@ -208,7 +208,7 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 	var runErr error
 	useStaged := false
 	if cfg.Conductor.Staged {
-		stagedTemplates := conductor.BuiltinStagedTemplates()
+		stagedTemplates := conductor.BuiltinStagedTemplates(cfg.Model)
 		if stagedTmpl, ok := stagedTemplates[templateName]; ok {
 			useStaged = true
 			so := orchestrator.NewStageOrchestrator(msgBus, cfg, wt, sink, subEnv, runState.ID, stagedTmpl.WorkerConfig, stagedTmpl.TesterConfig, stagedTmpl.Stages)
@@ -216,7 +216,7 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 		}
 	}
 	if !useStaged {
-		templates := conductor.BuiltinTemplates()
+		templates := conductor.BuiltinTemplates(cfg.Model)
 		agentConfigs, ok := templates[templateName]
 		if !ok {
 			return fmt.Errorf("unknown workflow template: %s", templateName)

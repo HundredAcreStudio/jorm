@@ -397,7 +397,7 @@ func main() {
 			}
 
 			if workflowName != "" {
-				templates := conductor.BuiltinTemplates()
+				templates := conductor.BuiltinTemplates("")
 				agents, ok := templates[workflowName]
 				if !ok {
 					return fmt.Errorf("unknown workflow: %s\nAvailable: %s", workflowName, availableWorkflows(templates))

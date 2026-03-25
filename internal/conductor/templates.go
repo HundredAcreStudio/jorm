@@ -11,16 +11,19 @@ import (
 // BuiltinTemplates returns the default workflow templates.
 // Note: completion agents are NOT included here — the orchestrator's
 // injectValidators() adds the completion agent with proper multi-validator tracking.
-func BuiltinTemplates() map[string][]orchestrator.AgentConfig {
+func BuiltinTemplates(model string) map[string][]orchestrator.AgentConfig {
+	if model == "" {
+		model = "sonnet"
+	}
 	return map[string][]orchestrator.AgentConfig{
 		"single-worker": {
-			workerAgent("sonnet", 3, []orchestrator.Trigger{
+			workerAgent(model, 3, []orchestrator.Trigger{
 				{Topic: bus.TopicIssueOpened, Predicate: "always"},
 			}),
 		},
 
 		"worker-validator": {
-			workerAgent("sonnet", 5, []orchestrator.Trigger{
+			workerAgent(model, 5, []orchestrator.Trigger{
 				{Topic: bus.TopicIssueOpened, Predicate: "always"},
 				{Topic: bus.TopicValidationResult, Predicate: "rejected"},
 			}),
@@ -28,14 +31,14 @@ func BuiltinTemplates() map[string][]orchestrator.AgentConfig {
 
 		"full-workflow": {
 			plannerAgent(),
-			workerAgent("sonnet", 5, []orchestrator.Trigger{
+			workerAgent(model, 5, []orchestrator.Trigger{
 				{Topic: bus.TopicPlanReady, Predicate: "always"},
 				{Topic: bus.TopicValidationResult, Predicate: "rejected"},
 			}),
 		},
 
 		"debug-workflow": {
-			debugWorkerAgent(),
+			debugWorkerAgent(model),
 		},
 	}
 }
@@ -95,8 +98,8 @@ func workerAgent(model string, maxIter int, triggers []orchestrator.Trigger) orc
 	}
 }
 
-func debugWorkerAgent() orchestrator.AgentConfig {
-	cfg := workerAgent("sonnet", 5, []orchestrator.Trigger{
+func debugWorkerAgent(model string) orchestrator.AgentConfig {
+	cfg := workerAgent(model, 5, []orchestrator.Trigger{
 		{Topic: bus.TopicIssueOpened, Predicate: "always"},
 		{Topic: bus.TopicValidationResult, Predicate: "rejected"},
 	})
@@ -175,10 +178,13 @@ type StagedTemplate struct {
 }
 
 // BuiltinStagedTemplates returns staged workflow templates for the StageOrchestrator.
-func BuiltinStagedTemplates() map[string]StagedTemplate {
+func BuiltinStagedTemplates(model string) map[string]StagedTemplate {
+	if model == "" {
+		model = "sonnet"
+	}
 	return map[string]StagedTemplate{
 		"full-workflow": {
-			WorkerConfig: workerAgent("sonnet", 5, nil),
+			WorkerConfig: workerAgent(model, 5, nil),
 			TesterConfig: testerAgentConfig(),
 			Stages: []orchestrator.Stage{
 				{Name: "Planning", Kind: orchestrator.StageKindAgent, AgentConfig: ptr(plannerAgent())},
