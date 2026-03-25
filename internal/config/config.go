@@ -25,6 +25,7 @@ type Config struct {
 type ConductorConfig struct {
 	Enabled       bool   `yaml:"enabled"`
 	ClassifyModel string `yaml:"classify_model"` // default: "haiku"
+	Staged        bool   `yaml:"staged"`          // use stage orchestrator
 }
 
 type ProviderConfig struct {
