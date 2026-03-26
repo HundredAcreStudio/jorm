@@ -17,7 +17,6 @@ const (
 	TopicImplementationReady = "IMPLEMENTATION_READY"
 	TopicValidationResult    = "VALIDATION_RESULT"
 	TopicClusterComplete     = "CLUSTER_COMPLETE"
-	TopicClusterOperations   = "CLUSTER_OPERATIONS"
 	TopicStageStarted        = "STAGE_STARTED"
 	TopicStageCompleted      = "STAGE_COMPLETED"
 	TopicTestsReady          = "TESTS_READY"

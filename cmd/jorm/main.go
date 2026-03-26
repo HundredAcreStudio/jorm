@@ -20,7 +20,6 @@ import (
 	"github.com/jorm/internal/conductor"
 	"github.com/jorm/internal/events"
 	"github.com/jorm/internal/loop"
-	"github.com/jorm/internal/orchestrator"
 	"github.com/jorm/internal/store"
 	"github.com/jorm/internal/ui"
 )
@@ -397,14 +396,16 @@ func main() {
 			}
 
 			if workflowName != "" {
-				templates := conductor.BuiltinTemplates("")
-				agents, ok := templates[workflowName]
+				templates := conductor.BuiltinStagedTemplates("")
+				tmpl, ok := templates[workflowName]
 				if !ok {
 					return fmt.Errorf("unknown workflow: %s\nAvailable: %s", workflowName, availableWorkflows(templates))
 				}
-				for _, a := range agents {
-					fmt.Printf("  %-15s  role=%-12s  model=%-8s  triggers=%d\n",
-						a.Name, a.Role, a.Model, len(a.Triggers))
+				fmt.Printf("  Worker:  model=%-8s  maxIter=%d\n", tmpl.WorkerConfig.Model, tmpl.WorkerConfig.MaxIterations)
+				fmt.Printf("  Tester:  %s (%s)\n", tmpl.TesterConfig.Name, tmpl.TesterConfig.Command)
+				fmt.Printf("  Stages:  %d\n", len(tmpl.Stages))
+				for _, s := range tmpl.Stages {
+					fmt.Printf("    - %s (%s)\n", s.Name, s.Kind)
 				}
 				return nil
 			}
@@ -494,7 +495,7 @@ func cleanRun(st *store.Store, r *store.RunState) error {
 	return nil
 }
 
-func availableWorkflows(templates map[string][]orchestrator.AgentConfig) string {
+func availableWorkflows(templates map[string]conductor.StagedTemplate) string {
 	names := make([]string, 0, len(templates))
 	for name := range templates {
 		names = append(names, name)

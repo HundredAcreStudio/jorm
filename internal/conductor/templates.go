@@ -10,41 +10,6 @@ import (
 	"github.com/jorm/internal/orchestrator"
 )
 
-// BuiltinTemplates returns the default workflow templates.
-// Note: completion agents are NOT included here — the orchestrator's
-// injectValidators() adds the completion agent with proper multi-validator tracking.
-func BuiltinTemplates(model string) map[string][]orchestrator.AgentConfig {
-	if model == "" {
-		model = "sonnet"
-	}
-	return map[string][]orchestrator.AgentConfig{
-		"single-worker": {
-			workerAgent(model, 3, []orchestrator.Trigger{
-				{Topic: bus.TopicIssueOpened, Predicate: "always"},
-			}),
-		},
-
-		"worker-validator": {
-			workerAgent(model, 5, []orchestrator.Trigger{
-				{Topic: bus.TopicIssueOpened, Predicate: "always"},
-				{Topic: bus.TopicValidationResult, Predicate: "rejected"},
-			}),
-		},
-
-		"full-workflow": {
-			plannerAgent(),
-			workerAgent(model, 5, []orchestrator.Trigger{
-				{Topic: bus.TopicPlanReady, Predicate: "always"},
-				{Topic: bus.TopicValidationResult, Predicate: "rejected"},
-			}),
-		},
-
-		"debug-workflow": {
-			debugWorkerAgent(model),
-		},
-	}
-}
-
 func plannerAgent() orchestrator.AgentConfig {
 	return orchestrator.AgentConfig{
 		ID:            "planner",
@@ -98,17 +63,6 @@ func workerAgent(model string, maxIter int, triggers []orchestrator.Trigger) orc
 		OnComplete:    []orchestrator.OnCompleteAction{{Topic: bus.TopicImplementationReady}},
 		ContextBuilder: orchestrator.BuildWorkerContext,
 	}
-}
-
-func debugWorkerAgent(model string) orchestrator.AgentConfig {
-	cfg := workerAgent(model, 5, []orchestrator.Trigger{
-		{Topic: bus.TopicIssueOpened, Predicate: "always"},
-		{Topic: bus.TopicValidationResult, Predicate: "rejected"},
-	})
-	cfg.ID = "debugger"
-	cfg.Name = "Debugger"
-	cfg.Prompt = "builtin:debug-worker"
-	return cfg
 }
 
 func testWriterAgent() orchestrator.AgentConfig {
@@ -184,7 +138,13 @@ type StagedTemplate struct {
 func BuildStagedTemplate(cfg *config.Config, profile string) (StagedTemplate, error) {
 	validators, err := cfg.ValidatorsForProfile(profile)
 	if err != nil {
-		return StagedTemplate{}, fmt.Errorf("resolving profile %q: %w", profile, err)
+		// Profile not configured at all → graceful fallback to builtin.
+		// But if the profile exists and references a broken validator, surface the error.
+		if _, hasProfile := cfg.Profiles[profile]; hasProfile {
+			return StagedTemplate{}, fmt.Errorf("resolving profile %q: %w", profile, err)
+		}
+		builtin := BuiltinStagedTemplates(cfg.Model)
+		return builtin["full-workflow"], nil
 	}
 	if len(validators) == 0 {
 		builtin := BuiltinStagedTemplates(cfg.Model)

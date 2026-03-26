@@ -194,37 +194,21 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 	msgBus := bus.New(st.DB())
 
 	// Classify the issue
-	cond := conductor.New(cfg.Conductor.ClassifyModel, wt.Dir, subEnv, sink, cfg.Conductor.Staged)
+	cond := conductor.New(cfg.Conductor.ClassifyModel, wt.Dir, subEnv, sink)
 	cls, err := cond.Classify(ctx, iss)
 	if err != nil {
 		return fmt.Errorf("conductor classification: %w", err)
 	}
 
-	// Select workflow template
-	templateName := cond.SelectTemplate(cls)
 	sink.Classification(fmt.Sprintf("%s/%s", cls.Complexity, cls.Type))
-	sink.Phase(fmt.Sprintf("Workflow: %s (%s/%s)", templateName, cls.Complexity, cls.Type))
+	sink.Phase(fmt.Sprintf("Workflow: staged (%s/%s)", cls.Complexity, cls.Type))
 
-	var runErr error
-	useStaged := false
-	if cfg.Conductor.Staged {
-		stagedTmpl, err := conductor.BuildStagedTemplate(cfg, cfg.Profile)
-		if err != nil {
-			return fmt.Errorf("building staged template: %w", err)
-		}
-		useStaged = true
-		so := orchestrator.NewStageOrchestrator(msgBus, cfg, wt, sink, subEnv, runState.ID, stagedTmpl.WorkerConfig, stagedTmpl.TesterConfig, stagedTmpl.Stages)
-		runErr = so.Run(ctx, iss)
+	stagedTmpl, err := conductor.BuildStagedTemplate(cfg, cfg.Profile)
+	if err != nil {
+		return fmt.Errorf("building staged template: %w", err)
 	}
-	if !useStaged {
-		templates := conductor.BuiltinTemplates(cfg.Model)
-		agentConfigs, ok := templates[templateName]
-		if !ok {
-			return fmt.Errorf("unknown workflow template: %s", templateName)
-		}
-		orch := orchestrator.New(msgBus, cfg, wt, sink, subEnv)
-		runErr = orch.Run(ctx, iss, runState.ID, agentConfigs)
-	}
+	so := orchestrator.NewStageOrchestrator(msgBus, cfg, wt, sink, subEnv, runState.ID, stagedTmpl.WorkerConfig, stagedTmpl.TesterConfig, stagedTmpl.Stages)
+	runErr := so.Run(ctx, iss)
 	if runErr != nil {
 		runState.Status = "rejected"
 		if saveErr := st.Save(runState); saveErr != nil {

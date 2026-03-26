@@ -5,13 +5,13 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/jorm/internal/agent"
 	"github.com/jorm/internal/bus"
-	"github.com/jorm/internal/config"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -86,6 +86,11 @@ func newTestBus(t *testing.T) *bus.Bus {
 	}
 
 	return bus.New(db)
+}
+
+// contains is a test helper wrapping strings.Contains for readability.
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }
 
 // TestShellAgent_ExecutesCommand verifies that shell execution mode runs the actual
@@ -401,183 +406,6 @@ func TestPassthroughAgent_RejectionDoesNotPublishComplete(t *testing.T) {
 	<-done
 }
 
-// TestInjectValidators_ShellType verifies that injectValidators() creates shell-mode
-// agent configs for type:"shell" validators instead of Claude agents.
-func TestInjectValidators_ShellType(t *testing.T) {
-	cfg := &config.Config{
-		Profile: "default",
-		Validators: []config.ValidatorConfig{
-			{ID: "build", Name: "Build", Type: "shell", Command: "go build ./...", OnFail: "reject", RunOn: "always"},
-			{ID: "test", Name: "Tests", Type: "shell", Command: "go test ./...", OnFail: "reject", RunOn: "always"},
-		},
-		Profiles: map[string][]string{
-			"default": {"build", "test"},
-		},
-	}
-
-	o := &Orchestrator{cfg: cfg}
-
-	initial := []AgentConfig{
-		{ID: "worker", Name: "Worker", Role: "worker"},
-		{ID: "completion", Name: "Completion", Role: "completion"}, // should be removed and replaced
-	}
-
-	result, err := o.injectValidators(initial)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	completionCount := 0
-	shellCount := 0
-	workerCount := 0
-	for _, c := range result {
-		switch {
-		case c.Role == "completion":
-			completionCount++
-		case c.ExecutionMode == "shell":
-			shellCount++
-			if c.Command == "" {
-				t.Errorf("shell agent %s has empty Command", c.ID)
-			}
-		case c.Role == "worker":
-			workerCount++
-		}
-		if c.Role == "validator" && c.ExecutionMode != "shell" && c.ExecutionMode != "claude" {
-			t.Errorf("validator %s has unexpected ExecutionMode %q", c.ID, c.ExecutionMode)
-		}
-	}
-
-	if shellCount != 2 {
-		t.Errorf("expected 2 shell validators, got %d", shellCount)
-	}
-	if completionCount != 1 {
-		t.Errorf("expected exactly 1 completion agent, got %d", completionCount)
-	}
-	if workerCount != 1 {
-		t.Errorf("expected 1 worker, got %d", workerCount)
-	}
-
-	for _, c := range result {
-		if c.Role == "completion" {
-			if c.ExecutionMode != "passthrough" {
-				t.Errorf("completion agent should use passthrough mode, got %q", c.ExecutionMode)
-			}
-			if c.TriggerProcessor == nil {
-				t.Error("completion agent should have a TriggerProcessor")
-			}
-		}
-	}
-}
-
-// TestInjectValidators_ClaudeType verifies claude validators get ExecutionMode="claude".
-func TestInjectValidators_ClaudeType(t *testing.T) {
-	cfg := &config.Config{
-		Profile: "default",
-		Validators: []config.ValidatorConfig{
-			{ID: "review", Name: "Review", Type: "claude", Mode: "review", Prompt: "Review the code", OnFail: "reject", RunOn: "always"},
-			{ID: "action", Name: "Action", Type: "claude", Mode: "action", Prompt: "Fix issues", OnFail: "reject", RunOn: "always"},
-		},
-		Profiles: map[string][]string{
-			"default": {"review", "action"},
-		},
-	}
-
-	o := &Orchestrator{cfg: cfg}
-	result, err := o.injectValidators(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	claudeCount := 0
-	for _, c := range result {
-		if c.ExecutionMode == "claude" {
-			claudeCount++
-			if c.ResultProcessor == nil {
-				t.Errorf("claude validator %s should have ResultProcessor", c.ID)
-			}
-		}
-	}
-
-	if claudeCount != 2 {
-		t.Errorf("expected 2 claude validators, got %d", claudeCount)
-	}
-}
-
-// TestInjectValidators_AcceptOnlySkipped verifies accept_only validators are excluded.
-func TestInjectValidators_AcceptOnlySkipped(t *testing.T) {
-	cfg := &config.Config{
-		Profile: "default",
-		Validators: []config.ValidatorConfig{
-			{ID: "build", Name: "Build", Type: "shell", Command: "go build", OnFail: "reject", RunOn: "always"},
-			{ID: "deploy", Name: "Deploy", Type: "shell", Command: "deploy.sh", OnFail: "reject", RunOn: "accept_only"},
-		},
-		Profiles: map[string][]string{
-			"default": {"build", "deploy"},
-		},
-	}
-
-	o := &Orchestrator{cfg: cfg}
-	result, err := o.injectValidators(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	validatorCount := 0
-	for _, c := range result {
-		if c.Role == "validator" {
-			validatorCount++
-		}
-	}
-	if validatorCount != 1 {
-		t.Errorf("expected 1 validator (accept_only should be skipped), got %d", validatorCount)
-	}
-}
-
-// TestInjectValidators_RequirementsReviewHasContextBuilder verifies that a claude review
-// validator with builtin:requirements-review gets ContextBuilder and ReviewMode set.
-func TestInjectValidators_RequirementsReviewHasContextBuilder(t *testing.T) {
-	cfg := &config.Config{
-		Profile: "default",
-		Validators: []config.ValidatorConfig{
-			{ID: "requirements", Name: "Requirements", Type: "claude", Mode: "review", Prompt: "builtin:requirements-review", OnFail: "reject", RunOn: "always"},
-		},
-		Profiles: map[string][]string{
-			"default": {"requirements"},
-		},
-	}
-
-	o := &Orchestrator{cfg: cfg}
-	result, err := o.injectValidators(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var found bool
-	for _, c := range result {
-		if c.ID == "validator-requirements" {
-			found = true
-			if c.ContextBuilder == nil {
-				t.Error("expected ContextBuilder to be set for requirements validator")
-			}
-			if !c.ReviewMode {
-				t.Error("expected ReviewMode=true for requirements review validator")
-			}
-			if c.ExecutionMode != "claude" {
-				t.Errorf("expected ExecutionMode=claude, got %q", c.ExecutionMode)
-			}
-			if c.Prompt != "builtin:requirements-review" {
-				t.Errorf("expected Prompt=builtin:requirements-review, got %q", c.Prompt)
-			}
-			if c.ResultProcessor == nil {
-				t.Error("expected ResultProcessor to be set")
-			}
-			break
-		}
-	}
-	if !found {
-		t.Fatal("validator-requirements agent not found in injected configs")
-	}
-}
 
 // TestExecuteOnce_ShellAgent_Success verifies that calling ExecuteOnce directly on a
 // shell-mode agent returns Approved=true and non-empty output on success.
