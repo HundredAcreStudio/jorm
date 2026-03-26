@@ -16,9 +16,9 @@ import (
 // Single issue:
 //   CGO_ENABLED=1 go test -tags e2e -timeout 10m -v -focus "Issue 1" ./internal/e2e/
 
-var _ = Describe("Calibration", Ordered, func() {
+var _ = Describe("Calibration", func() {
 
-	Describe("Issue 1: StringReverse (TRIVIAL)", func() {
+	Describe("Issue 1: StringReverse (TRIVIAL)", Ordered, func() {
 		var (
 			workDir string
 			result  *RunResult
@@ -65,9 +65,30 @@ var _ = Describe("Calibration", Ordered, func() {
 			completed := CompletedStageNames(result.Stages)
 			Expect(len(completed)).To(BeNumerically(">=", 3), "stages: %v", completed)
 		})
+
+		Context("post-review", Label("post-review"), func() {
+			var pr *PostReviewResult
+
+			BeforeAll(func() {
+				var err error
+				pr, err = RunPostReview(workDir)
+				Expect(err).NotTo(HaveOccurred())
+				if pr == nil {
+					Skip("post-review script not found")
+				}
+			})
+
+			It("should pass PR review", func() {
+				Expect(pr.PRReview).To(Equal("ACCEPT"), "PR review found issues:\n%s", pr.Output)
+			})
+
+			It("should pass security review", func() {
+				Expect(pr.Security).To(Equal("ACCEPT"), "Security review found issues:\n%s", pr.Output)
+			})
+		})
 	})
 
-	Describe("Issue 2: Health Check Endpoint (SIMPLE)", func() {
+	Describe("Issue 2: Health Check Endpoint (SIMPLE)", Ordered, func() {
 		var (
 			workDir string
 			result  *RunResult
@@ -109,9 +130,30 @@ var _ = Describe("Calibration", Ordered, func() {
 			msg := CommitMessage(workDir)
 			Expect(msg).To(ContainSubstring("Closes #2"))
 		})
+
+		Context("post-review", Label("post-review"), func() {
+			var pr *PostReviewResult
+
+			BeforeAll(func() {
+				var err error
+				pr, err = RunPostReview(workDir)
+				Expect(err).NotTo(HaveOccurred())
+				if pr == nil {
+					Skip("post-review script not found")
+				}
+			})
+
+			It("should pass PR review", func() {
+				Expect(pr.PRReview).To(Equal("ACCEPT"), "PR review found issues:\n%s", pr.Output)
+			})
+
+			It("should pass security review", func() {
+				Expect(pr.Security).To(Equal("ACCEPT"), "Security review found issues:\n%s", pr.Output)
+			})
+		})
 	})
 
-	Describe("Issue 3: Logging Middleware (STANDARD)", func() {
+	Describe("Issue 3: Logging Middleware (STANDARD)", Ordered, func() {
 		var (
 			workDir string
 			result  *RunResult
@@ -160,9 +202,30 @@ var _ = Describe("Calibration", Ordered, func() {
 			Expect(strings.Contains(string(data), "middleware") || strings.Contains(string(data), "Logging")).To(BeTrue(),
 				"main.go should reference the logging middleware")
 		})
+
+		Context("post-review", Label("post-review"), func() {
+			var pr *PostReviewResult
+
+			BeforeAll(func() {
+				var err error
+				pr, err = RunPostReview(workDir)
+				Expect(err).NotTo(HaveOccurred())
+				if pr == nil {
+					Skip("post-review script not found")
+				}
+			})
+
+			It("should pass PR review", func() {
+				Expect(pr.PRReview).To(Equal("ACCEPT"), "PR review found issues:\n%s", pr.Output)
+			})
+
+			It("should pass security review", func() {
+				Expect(pr.Security).To(Equal("ACCEPT"), "Security review found issues:\n%s", pr.Output)
+			})
+		})
 	})
 
-	Describe("Issue 4: Cache Race Condition (DEBUG)", func() {
+	Describe("Issue 4: Cache Race Condition (DEBUG)", Ordered, func() {
 		var (
 			workDir string
 			result  *RunResult
@@ -208,9 +271,30 @@ var _ = Describe("Calibration", Ordered, func() {
 			Expect(string(data)).To(ContainSubstring("sync.RWMutex"),
 				"Cache struct should use sync.RWMutex for thread safety")
 		})
+
+		Context("post-review", Label("post-review"), func() {
+			var pr *PostReviewResult
+
+			BeforeAll(func() {
+				var err error
+				pr, err = RunPostReview(workDir)
+				Expect(err).NotTo(HaveOccurred())
+				if pr == nil {
+					Skip("post-review script not found")
+				}
+			})
+
+			It("should pass PR review", func() {
+				Expect(pr.PRReview).To(Equal("ACCEPT"), "PR review found issues:\n%s", pr.Output)
+			})
+
+			It("should pass security review", func() {
+				Expect(pr.Security).To(Equal("ACCEPT"), "Security review found issues:\n%s", pr.Output)
+			})
+		})
 	})
 
-	Describe("Issue 5: UpdateUser Endpoint (STANDARD)", func() {
+	Describe("Issue 5: UpdateUser Endpoint (STANDARD)", Ordered, func() {
 		var (
 			workDir string
 			result  *RunResult
@@ -257,6 +341,27 @@ var _ = Describe("Calibration", Ordered, func() {
 		It("should include Closes #5 in the commit message", func() {
 			msg := CommitMessage(workDir)
 			Expect(msg).To(ContainSubstring("Closes #5"))
+		})
+
+		Context("post-review", Label("post-review"), func() {
+			var pr *PostReviewResult
+
+			BeforeAll(func() {
+				var err error
+				pr, err = RunPostReview(workDir)
+				Expect(err).NotTo(HaveOccurred())
+				if pr == nil {
+					Skip("post-review script not found")
+				}
+			})
+
+			It("should pass PR review", func() {
+				Expect(pr.PRReview).To(Equal("ACCEPT"), "PR review found issues:\n%s", pr.Output)
+			})
+
+			It("should pass security review", func() {
+				Expect(pr.Security).To(Equal("ACCEPT"), "Security review found issues:\n%s", pr.Output)
+			})
 		})
 	})
 })

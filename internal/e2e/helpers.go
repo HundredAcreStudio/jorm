@@ -21,13 +21,11 @@ func JormBinary() string {
 			return bin
 		}
 	}
-	// Fall back to repo-relative path
-	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
-	out, err := cmd.Output()
-	if err != nil {
+	root := repoRoot()
+	if root == "" {
 		return ""
 	}
-	return filepath.Join(strings.TrimSpace(string(out)), "bin", "jorm")
+	return filepath.Join(root, "bin", "jorm")
 }
 
 // CloneCalibrationRepo clones the calibration repo into a temp dir and returns the path.
@@ -203,4 +201,71 @@ func CompletedStageNames(stages []StageEvent) []string {
 func HasFile(workDir, path string) bool {
 	_, err := os.Stat(filepath.Join(workDir, path))
 	return err == nil
+}
+
+// PostReviewResult holds the outcome of running review prompts against a completed run.
+type PostReviewResult struct {
+	ExitCode int
+	Output   string
+	PRReview string // "ACCEPT", "REJECT", "UNKNOWN", "SKIP"
+	Security string
+	Tester   string
+}
+
+// RunPostReview executes the post-review script against a completed jorm run.
+// Returns nil if the script is not found (non-fatal).
+func RunPostReview(workDir string) (*PostReviewResult, error) {
+	root := repoRoot()
+	script := filepath.Join(root, "scripts", "post-review.sh")
+	if _, err := os.Stat(script); err != nil {
+		return nil, nil // script not found, skip
+	}
+
+	cmd := exec.Command(script, workDir, "--json")
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		}
+	}
+
+	result := &PostReviewResult{
+		ExitCode: exitCode,
+		Output:   string(out),
+	}
+
+	// Parse JSON output for individual results
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.Contains(line, "pr-review") {
+			result.PRReview = extractVerdict(line)
+		} else if strings.Contains(line, "security-review") {
+			result.Security = extractVerdict(line)
+		} else if strings.Contains(line, "tester-review") {
+			result.Tester = extractVerdict(line)
+		}
+	}
+
+	return result, nil
+}
+
+func extractVerdict(line string) string {
+	for _, v := range []string{"ACCEPT", "REJECT", "SKIP", "UNKNOWN"} {
+		if strings.Contains(line, v) {
+			return v
+		}
+	}
+	return "UNKNOWN"
+}
+
+func repoRoot() string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

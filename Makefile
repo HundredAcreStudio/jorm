@@ -1,4 +1,4 @@
-.PHONY: help bootstrap build run test test-e2e test-e2e-focus lint vet fmt clean tidy
+.PHONY: help bootstrap build run test test-e2e test-e2e-focus post-review lint vet fmt clean tidy
 .DEFAULT_GOAL := help
 
 CGO_ENABLED := 1
@@ -41,6 +41,9 @@ test-e2e: ## Run e2e calibration suite via ginkgo
 
 test-e2e-focus: ## Run single e2e test (use FOCUS="Issue 1")
 	CGO_ENABLED=$(CGO_ENABLED) ginkgo -tags e2e -timeout 10m -v -focus "$(FOCUS)" ./internal/e2e/
+
+post-review: ## Run review prompts against a jorm output repo (use REPO=path)
+	./scripts/post-review.sh $(REPO)
 
 lint: ## Run golangci-lint
 	golangci-lint run
