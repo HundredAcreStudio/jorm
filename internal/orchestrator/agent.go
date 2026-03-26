@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"reflect"
 	"strings"
 	"time"
 
@@ -24,12 +23,6 @@ const (
 	StateExecuting       AgentState = "executing"
 )
 
-// Trigger defines when an agent should activate.
-type Trigger struct {
-	Topic     string
-	Predicate string // "always", "approved", "rejected"
-}
-
 // OnCompleteAction defines a message to publish when an agent finishes.
 type OnCompleteAction struct {
 	Topic string
@@ -40,12 +33,11 @@ type AgentConfig struct {
 	ID            string
 	Name          string
 	Role          string // "planner", "worker", "validator", "completion"
-	Triggers      []Trigger
 	Prompt        string // supports "builtin:" prefix
 	Model         string
 	MaxIterations int
 	OnComplete    []OnCompleteAction
-	// ExecutionMode controls how the agent executes: "claude" (default), "shell", or "passthrough".
+	// ExecutionMode controls how the agent executes: "claude" (default) or "shell".
 	ExecutionMode string
 	// Command is the shell command to execute (only used when ExecutionMode=="shell").
 	Command string
@@ -55,9 +47,6 @@ type AgentConfig struct {
 	// ResultProcessor extracts structured data from the agent's output
 	// to include in the OnComplete message's Data field.
 	ResultProcessor func(result *agent.ClaudeResult) map[string]any
-	// TriggerProcessor processes trigger messages directly without executing Claude or shell.
-	// Used with ExecutionMode "passthrough". Returns (data, shouldPublish).
-	TriggerProcessor func(msg bus.Message) (map[string]any, bool)
 	// ReviewMode when true appends the VERDICT instruction to the prompt automatically.
 	// Used for claude review validators so custom prompts don't need to include it.
 	ReviewMode bool
@@ -111,113 +100,11 @@ func NewAgent(cfg AgentConfig, b *bus.Bus, sink events.Sink, clusterID, workDir,
 	}
 }
 
-// Run starts the agent's trigger-driven lifecycle loop.
-// It blocks until the context is cancelled or maxIterations is reached.
-func (a *Agent) Run(ctx context.Context) error {
-	// Subscribe to all trigger topics
-	channels := make(map[string]<-chan bus.Message)
-	for _, t := range a.Config.Triggers {
-		ch := a.bus.Subscribe(t.Topic)
-		channels[t.Topic] = ch
-		defer a.bus.Unsubscribe(t.Topic, ch)
-	}
-
-	for {
-		a.setState(StateIdle)
-
-		// Wait for a matching trigger
-		msg, err := a.waitForTrigger(ctx, channels)
-		if err != nil {
-			return err // context cancelled
-		}
-
-		a.setState(StateEvaluating)
-
-		// Check if we've exceeded max iterations
-		if a.Config.MaxIterations > 0 && a.Iteration >= a.Config.MaxIterations {
-			return nil
-		}
-
-		// Check if context was cancelled between trigger and execution
-		if ctx.Err() != nil {
-			return nil
-		}
-
-		// Store trigger message so ExecuteOnce can access it
-		a.lastTrigger = msg
-
-		result, err := a.ExecuteOnce(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			continue
-		}
-
-		// Publish OnComplete messages based on execution mode
-		switch a.Config.ExecutionMode {
-		case "passthrough":
-			if a.Config.TriggerProcessor != nil {
-				data, shouldPublish := a.Config.TriggerProcessor(msg)
-				if shouldPublish {
-					for _, action := range a.Config.OnComplete {
-						a.bus.Publish(bus.Message{
-							ClusterID: a.clusterID,
-							Topic:     action.Topic,
-							Sender:    a.Config.ID,
-							Content:   msg.Content,
-							Data:      data,
-						})
-					}
-				}
-			}
-		case "shell":
-			for _, action := range a.Config.OnComplete {
-				a.bus.Publish(bus.Message{
-					ClusterID: a.clusterID,
-					Topic:     action.Topic,
-					Sender:    a.Config.ID,
-					Content:   result.Output,
-					Data: map[string]any{
-						"approved":     result.Approved,
-						"validator_id": a.Config.ID,
-						"agent_id":     a.Config.ID,
-						"iteration":    a.Iteration,
-					},
-				})
-			}
-		default: // claude
-			data := map[string]any{
-				"agent_id":  a.Config.ID,
-				"iteration": a.Iteration,
-			}
-			for k, v := range result.Data {
-				data[k] = v
-			}
-			for _, action := range a.Config.OnComplete {
-				a.bus.Publish(bus.Message{
-					ClusterID: a.clusterID,
-					Topic:     action.Topic,
-					Sender:    a.Config.ID,
-					Content:   result.Output,
-					Data:      data,
-				})
-			}
-		}
-	}
-}
-
-// ExecuteOnce runs the agent's execution cycle exactly once (no trigger loop).
+// ExecuteOnce runs the agent's execution cycle exactly once.
 // Used by StageOrchestrator to run agents synchronously.
-// Run() sets a.lastTrigger before calling this so trigger context is available.
 func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
 	a.setState(StateExecuting)
 	a.Iteration++
-
-	// Passthrough mode is driven by trigger messages; no synchronous execution body.
-	if a.Config.ExecutionMode == "passthrough" {
-		return &AgentResult{}, nil
-	}
 
 	a.sink.AgentTriggerFired(a.Config.ID, a.lastTrigger.Topic, a.Iteration, a.Config.Model)
 
@@ -362,86 +249,23 @@ func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
 	return &AgentResult{Output: result.Text, Approved: approved, Cost: result.Cost, Data: data}, nil
 }
 
-// waitForTrigger blocks until a message matches one of the agent's triggers.
-// Uses reflect.Select for proper blocking across multiple channels.
-func (a *Agent) waitForTrigger(ctx context.Context, channels map[string]<-chan bus.Message) (bus.Message, error) {
-	// Build reflect.SelectCase slice: first case is ctx.Done(), rest are trigger channels
-	selectCases := make([]reflect.SelectCase, 0, len(a.Config.Triggers)+1)
-	triggerMap := make([]Trigger, 0, len(a.Config.Triggers))
-
-	// Case 0: context cancellation
-	selectCases = append(selectCases, reflect.SelectCase{
-		Dir:  reflect.SelectRecv,
-		Chan: reflect.ValueOf(ctx.Done()),
-	})
-
-	// Remaining cases: trigger channels
-	for _, t := range a.Config.Triggers {
-		ch, ok := channels[t.Topic]
-		if !ok {
-			continue
-		}
-		selectCases = append(selectCases, reflect.SelectCase{
-			Dir:  reflect.SelectRecv,
-			Chan: reflect.ValueOf(ch),
+// PublishOnComplete publishes OnComplete messages to the bus with the agent's result data.
+func (a *Agent) PublishOnComplete(result *AgentResult) {
+	data := map[string]any{
+		"agent_id":  a.Config.ID,
+		"iteration": a.Iteration,
+	}
+	for k, v := range result.Data {
+		data[k] = v
+	}
+	for _, action := range a.Config.OnComplete {
+		a.bus.Publish(bus.Message{
+			ClusterID: a.clusterID,
+			Topic:     action.Topic,
+			Sender:    a.Config.ID,
+			Content:   result.Output,
+			Data:      data,
 		})
-		triggerMap = append(triggerMap, t)
-	}
-
-	for {
-		chosen, value, ok := reflect.Select(selectCases)
-
-		// Case 0: context cancelled
-		if chosen == 0 {
-			return bus.Message{}, ctx.Err()
-		}
-
-		// Channel closed
-		if !ok {
-			return bus.Message{}, fmt.Errorf("trigger channel closed for agent %s", a.Config.Name)
-		}
-
-		msg := value.Interface().(bus.Message)
-		trigger := triggerMap[chosen-1]
-
-		if evaluatePredicate(trigger.Predicate, msg) {
-			return msg, nil
-		}
-		// Predicate didn't match, loop back and wait again
-	}
-}
-
-// evaluatePredicate checks if a message matches a named predicate.
-func evaluatePredicate(predicate string, msg bus.Message) bool {
-	switch strings.ToLower(predicate) {
-	case "always", "":
-		return true
-	case "approved":
-		v, ok := msg.Data["approved"]
-		if !ok {
-			return false
-		}
-		switch val := v.(type) {
-		case bool:
-			return val
-		case string:
-			return val == "true"
-		}
-		return false
-	case "rejected":
-		v, ok := msg.Data["approved"]
-		if !ok {
-			return false
-		}
-		switch val := v.(type) {
-		case bool:
-			return !val
-		case string:
-			return val == "false"
-		}
-		return false
-	default:
-		return true
 	}
 }
 

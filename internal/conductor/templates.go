@@ -15,7 +15,6 @@ func plannerAgent() orchestrator.AgentConfig {
 		ID:            "planner",
 		Name:          "Planner",
 		Role:          "planner",
-		Triggers:      []orchestrator.Trigger{{Topic: bus.TopicIssueOpened, Predicate: "always"}},
 		Prompt:        "builtin:planner",
 		Model:         "sonnet",
 		MaxIterations: 1,
@@ -51,12 +50,11 @@ func extractSection(text, heading string) string {
 	return strings.TrimSpace(rest[:end])
 }
 
-func workerAgent(model string, maxIter int, triggers []orchestrator.Trigger) orchestrator.AgentConfig {
+func workerAgent(model string, maxIter int) orchestrator.AgentConfig {
 	return orchestrator.AgentConfig{
 		ID:            "worker",
 		Name:          "Worker",
 		Role:          "worker",
-		Triggers:      triggers,
 		Prompt:        "builtin:worker",
 		Model:         model,
 		MaxIterations: maxIter,
@@ -70,7 +68,6 @@ func testWriterAgent() orchestrator.AgentConfig {
 		ID:            "test-writer",
 		Name:          "Test Writer",
 		Role:          "worker",
-		Triggers:      []orchestrator.Trigger{{Topic: bus.TopicPlanReady, Predicate: "always"}},
 		Prompt:        "builtin:test-writer",
 		Model:         "sonnet",
 		MaxIterations: 1,
@@ -244,7 +241,7 @@ func BuildStagedTemplate(cfg *config.Config, profile string) (StagedTemplate, er
 	}
 
 	return StagedTemplate{
-		WorkerConfig: workerAgent(model, 5, nil),
+		WorkerConfig: workerAgent(model, 5),
 		TesterConfig: testerCfg,
 		Stages:       stages,
 	}, nil
@@ -257,7 +254,7 @@ func BuiltinStagedTemplates(model string) map[string]StagedTemplate {
 	}
 	return map[string]StagedTemplate{
 		"full-workflow": {
-			WorkerConfig: workerAgent(model, 5, nil),
+			WorkerConfig: workerAgent(model, 5),
 			TesterConfig: testerAgentConfig(),
 			Stages: []orchestrator.Stage{
 				{Name: "Planning", Kind: orchestrator.StageKindAgent, AgentConfig: ptr(plannerAgent())},

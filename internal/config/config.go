@@ -9,12 +9,10 @@ import (
 )
 
 type Config struct {
-	MaxAttempts   int                        `yaml:"max_attempts"`
 	Model         string                     `yaml:"model"`
 	Profile       string                     `yaml:"profile"`
 	Validators    []ValidatorConfig          `yaml:"validators"`
 	Profiles      map[string][]string        `yaml:"profiles"`
-	Cluster       ClusterConfig              `yaml:"cluster"`
 	Conductor     ConductorConfig            `yaml:"conductor"`
 	IssueProvider string                     `yaml:"issue_provider"` // "github", "linear", "jira"
 	Providers     map[string]ProviderConfig  `yaml:"providers"`
@@ -23,7 +21,6 @@ type Config struct {
 }
 
 type ConductorConfig struct {
-	Enabled       bool   `yaml:"enabled"`
 	ClassifyModel string `yaml:"classify_model"` // default: "haiku"
 }
 
@@ -56,10 +53,6 @@ type ValidatorConfig struct {
 	Timeout  time.Duration `yaml:"timeout"`
 }
 
-type ClusterConfig struct {
-	MaxParallel int `yaml:"max_parallel"`
-}
-
 type HooksConfig struct {
 	OnComplete []string `yaml:"on_complete"`
 	OnFailure  []string `yaml:"on_failure"`
@@ -81,7 +74,6 @@ func Load(path string) (*Config, error) {
 }
 
 func applyDefaults(cfg *Config) {
-	// MaxAttempts 0 means unlimited (YAML unmarshals missing int as 0).
 	if cfg.Model == "" {
 		cfg.Model = "sonnet"
 	}

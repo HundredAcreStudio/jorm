@@ -118,22 +118,8 @@ func (so *StageOrchestrator) runAgentStage(ctx context.Context, stage Stage) err
 		return fmt.Errorf("agent %q: %w", stage.AgentConfig.Name, err)
 	}
 
-	// Publish OnComplete messages (mirrors Agent.Run's "claude" branch)
-	data := map[string]any{
-		"agent_id":  stage.AgentConfig.ID,
-		"iteration": a.Iteration,
-	}
-	for k, v := range result.Data {
-		data[k] = v
-	}
+	a.PublishOnComplete(result)
 	for _, action := range stage.AgentConfig.OnComplete {
-		so.bus.Publish(bus.Message{
-			ClusterID: so.clusterID,
-			Topic:     action.Topic,
-			Sender:    stage.AgentConfig.ID,
-			Content:   result.Output,
-			Data:      data,
-		})
 		so.sink.MessagePublished(action.Topic, stage.AgentConfig.ID)
 	}
 
@@ -234,8 +220,13 @@ func (so *StageOrchestrator) runReviewer(ctx context.Context, stage Stage) (*Age
 }
 
 // runWorkerFix runs the worker agent to fix issues identified by the reviewer.
+// Uses stage-scoped context so the worker only sees the current stage's rejection feedback.
 func (so *StageOrchestrator) runWorkerFix(ctx context.Context, stageIdx int, stage Stage, reviewResult *AgentResult) error {
-	a := NewAgent(so.workerConfig, so.bus, so.sink, so.clusterID, so.workDir, so.repoDir, so.env)
+	workerCfg := so.workerConfig
+	workerCfg.ContextBuilder = func(b *bus.Bus, clusterID string) (string, error) {
+		return BuildStageScopedWorkerContext(b, clusterID, stageIdx, stage.Name)
+	}
+	a := NewAgent(workerCfg, so.bus, so.sink, so.clusterID, so.workDir, so.repoDir, so.env)
 
 	// Seed from most recent VALIDATION_RESULT (the rejection we just published)
 	if msg, err := so.bus.FindLast(so.clusterID, bus.TopicValidationResult); err == nil && msg != nil {
@@ -271,6 +262,7 @@ func (so *StageOrchestrator) runTester(ctx context.Context) (*AgentResult, error
 }
 
 // runWorkerTestFix runs the worker agent to fix failing tests.
+// Uses the standard worker context (test failures aren't stage-scoped).
 func (so *StageOrchestrator) runWorkerTestFix(ctx context.Context, testerResult *AgentResult) error {
 	a := NewAgent(so.workerConfig, so.bus, so.sink, so.clusterID, so.workDir, so.repoDir, so.env)
 

@@ -413,10 +413,9 @@ func main() {
 			// Print resolved config
 			fmt.Printf("Config: %s\n", configPath)
 			fmt.Printf("Model: %s\n", cfg.Model)
-			fmt.Printf("Max Attempts: %d (0=unlimited)\n", cfg.MaxAttempts)
 			fmt.Printf("Profile: %s\n", cfg.Profile)
 			fmt.Printf("Issue Provider: %s\n", cfg.IssueProvider)
-			fmt.Printf("Conductor: enabled=%v classify_model=%s\n", cfg.Conductor.Enabled, cfg.Conductor.ClassifyModel)
+			fmt.Printf("Conductor: classify_model=%s\n", cfg.Conductor.ClassifyModel)
 			if len(cfg.Validators) > 0 {
 				fmt.Printf("Validators: %d\n", len(cfg.Validators))
 				for _, v := range cfg.Validators {

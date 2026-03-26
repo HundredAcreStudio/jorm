@@ -18,7 +18,6 @@ func writeFile(t *testing.T, dir, name, content string) string {
 func TestLoadValidConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := writeFile(t, dir, "config.yaml", `
-max_attempts: 3
 model: opus
 profile: ci
 validators:
@@ -36,9 +35,6 @@ profiles:
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
-	}
-	if cfg.MaxAttempts != 3 {
-		t.Errorf("MaxAttempts = %d, want 3", cfg.MaxAttempts)
 	}
 	if cfg.Model != "opus" {
 		t.Errorf("Model = %q, want %q", cfg.Model, "opus")
@@ -87,9 +83,6 @@ func TestApplyDefaultsSetsEmptyFields(t *testing.T) {
 	}
 	if cfg.Profile != "default" {
 		t.Errorf("Profile = %q, want %q", cfg.Profile, "default")
-	}
-	if cfg.MaxAttempts != 0 {
-		t.Errorf("MaxAttempts = %d, want 0 (unlimited)", cfg.MaxAttempts)
 	}
 }
 
