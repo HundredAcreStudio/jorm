@@ -17,36 +17,38 @@ Structure your response as:
 
 ### Acceptance Criteria
 
-Produce **8–15 numbered acceptance criteria** using the format below. Each criterion must be mechanically verifiable — a validator should be able to check it by running the command and comparing actual output to expected output, with no subjective judgment required.
+Produce **5–12 numbered acceptance criteria** that describe the expected behavior of the implementation. Each criterion should be a clear, testable statement about what the code must do — not how to verify it.
 
-**Format for each criterion:**
+**Format:**
 ```
-AC<N>: `<verification command>` — <expected result or exit code> (<brief rationale>)
+AC1: <behavioral requirement>
+AC2: <behavioral requirement>
+...
 ```
-
-**Coverage requirements** — include criteria for all applicable categories (adapt commands to the project's language/build system):
-1. **Build**: `CGO_ENABLED=1 go build ./...` exits 0 (or equivalent for the project language)
-2. **Static analysis**: `go vet ./...` exits 0 (or equivalent linter)
-3. **Tests**: `go test ./...` — all tests pass, including any new tests
-4. **CLI interface**: verify new/changed subcommands, flags, or help output
-5. **New files/functions**: `grep` for expected exports, types, or function signatures
-6. **Behavioral requirements**: commands that exercise the new feature and verify output
-7. **Edge cases**: commands that test boundary conditions or error handling
 
 **Rules:**
-- Every criterion must include a concrete command to run and the expected output or exit code
-- Do not use vague criteria like "it should work" or "code is clean"
-- Criteria must be independently checkable (no ordering dependencies between them)
-- Keep each criterion to a single verifiable assertion
+- Describe **what** the implementation must do, not **how** to check it
+- Each criterion should be independently verifiable by reading the code or running the feature
+- Focus on behavior, edge cases, and correctness — not build/lint/vet (those are handled separately)
+- Be specific enough that a reviewer can unambiguously judge pass/fail
+- Do not include commands, file paths, or grep patterns
 
-**Example:**
+**Good examples:**
 ```
-AC1: `CGO_ENABLED=1 go build ./...` exits 0 (clean build)
-AC2: `go vet ./...` exits 0 (no static analysis warnings)
-AC3: `go test ./...` — all tests pass including new tests
-AC4: `grep -c 'func NewRouter' internal/router/router.go` outputs `1` (function exists)
-AC5: `go run ./cmd/app serve --help` includes `--port` flag (CLI flag registered)
-AC6: `curl -s localhost:8080/health | jq -r .status` outputs `ok` (health endpoint works)
+AC1: Reverse function correctly handles multi-byte UTF-8 characters (emoji, CJK)
+AC2: Empty string input returns empty string
+AC3: Health endpoint returns JSON with "status" and "timestamp" fields
+AC4: Middleware logs method, path, status code, and duration for each request
+AC5: Requests to /healthz are excluded from logging
+AC6: Cache is safe for concurrent read/write access
+AC7: Partial update with only name field does not clear the email field
+```
+
+**Bad examples (don't do this):**
+```
+AC1: `go build ./...` exits 0
+AC2: `grep -c 'func Reverse' internal/utils/strings.go` outputs 1
+AC3: Code is clean and well-structured
 ```
 
 ### Files Affected
