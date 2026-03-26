@@ -3,215 +3,260 @@
 package e2e
 
 import (
-	"os/exec"
+	"os"
 	"strings"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
-// These tests clone the calibration repo and run jorm against real GitHub issues.
-// They require: jorm binary built, Claude API access, GitHub token, network access.
-//
 // Run with:
 //   CGO_ENABLED=1 go test -tags e2e -timeout 30m -v ./internal/e2e/
 //
-// Run a single calibration issue:
-//   CGO_ENABLED=1 go test -tags e2e -timeout 10m -v -run TestCalibration_Issue1 ./internal/e2e/
+// Single issue:
+//   CGO_ENABLED=1 go test -tags e2e -timeout 10m -v -focus "Issue 1" ./internal/e2e/
 
-func TestCalibration_Issue1_StringReverse(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
-	}
+var _ = Describe("Calibration", Ordered, func() {
 
-	workDir := cloneCalibrationRepo(t)
-	result := runJorm(t, workDir, "1")
+	Describe("Issue 1: StringReverse (TRIVIAL)", func() {
+		var (
+			workDir string
+			result  *RunResult
+		)
 
-	// Basic success
-	if result.ExitCode != 0 {
-		t.Fatalf("jorm exited with code %d:\n%s", result.ExitCode, result.Output)
-	}
+		BeforeAll(func() {
+			dir, err := os.MkdirTemp("", "jorm-e2e-issue1-*")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(os.RemoveAll, dir)
 
-	// Must compile
-	if !result.Compiles {
-		t.Error("FAIL: code does not compile after jorm run")
-	}
+			workDir, err = CloneCalibrationRepo(dir)
+			Expect(err).NotTo(HaveOccurred())
 
-	// Must pass tests
-	if !result.TestsPass {
-		t.Error("FAIL: tests do not pass after jorm run")
-	}
+			result, err = RunJorm(workDir, "1")
+			Expect(err).NotTo(HaveOccurred())
+		})
 
-	// Must have created the expected files
-	if !hasFile(workDir, "internal/utils/strings.go") {
-		t.Error("FAIL: internal/utils/strings.go not created")
-	}
-	if !hasFile(workDir, "internal/utils/strings_test.go") {
-		t.Error("FAIL: internal/utils/strings_test.go not created")
-	}
+		It("should exit successfully", func() {
+			Expect(result.ExitCode).To(Equal(0), "jorm output:\n%s", result.Output)
+		})
 
-	// Commit message should reference the issue
-	msg := commitMessage(t, workDir)
-	if !strings.Contains(msg, "Closes #1") {
-		t.Errorf("FAIL: commit message missing 'Closes #1': %s", msg)
-	}
+		It("should compile", func() {
+			Expect(result.Compiles).To(BeTrue())
+		})
 
-	// Stages should have completed
-	completed := stageNames(result.Stages)
-	if len(completed) < 3 {
-		t.Errorf("expected at least 3 completed stages, got %d: %v", len(completed), completed)
-	}
+		It("should pass all tests", func() {
+			Expect(result.TestsPass).To(BeTrue())
+		})
 
-	t.Logf("Stages completed: %v", completed)
-	t.Logf("Files added: %v", result.FilesAdded)
-	t.Logf("Commit: %s", strings.Split(msg, "\n")[0])
-}
+		It("should create the Reverse function file", func() {
+			Expect(HasFile(workDir, "internal/utils/strings.go")).To(BeTrue())
+		})
 
-func TestCalibration_Issue2_HealthCheck(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
-	}
+		It("should create table-driven tests", func() {
+			Expect(HasFile(workDir, "internal/utils/strings_test.go")).To(BeTrue())
+		})
 
-	workDir := cloneCalibrationRepo(t)
-	result := runJorm(t, workDir, "2")
+		It("should include Closes #1 in the commit message", func() {
+			msg := CommitMessage(workDir)
+			Expect(msg).To(ContainSubstring("Closes #1"))
+		})
 
-	if result.ExitCode != 0 {
-		t.Fatalf("jorm exited with code %d:\n%s", result.ExitCode, result.Output)
-	}
+		It("should complete at least 3 stages", func() {
+			completed := CompletedStageNames(result.Stages)
+			Expect(len(completed)).To(BeNumerically(">=", 3), "stages: %v", completed)
+		})
+	})
 
-	if !result.Compiles {
-		t.Error("FAIL: code does not compile")
-	}
-	if !result.TestsPass {
-		t.Error("FAIL: tests do not pass")
-	}
+	Describe("Issue 2: Health Check Endpoint (SIMPLE)", func() {
+		var (
+			workDir string
+			result  *RunResult
+		)
 
-	// Health handler should exist
-	if !hasFile(workDir, "internal/handler/health.go") {
-		t.Error("FAIL: internal/handler/health.go not created")
-	}
+		BeforeAll(func() {
+			dir, err := os.MkdirTemp("", "jorm-e2e-issue2-*")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(os.RemoveAll, dir)
 
-	// Health tests should exist
-	if !hasFile(workDir, "internal/handler/health_test.go") {
-		t.Error("FAIL: internal/handler/health_test.go not created")
-	}
+			workDir, err = CloneCalibrationRepo(dir)
+			Expect(err).NotTo(HaveOccurred())
 
-	msg := commitMessage(t, workDir)
-	if !strings.Contains(msg, "Closes #2") {
-		t.Errorf("FAIL: commit message missing 'Closes #2': %s", msg)
-	}
+			result, err = RunJorm(workDir, "2")
+			Expect(err).NotTo(HaveOccurred())
+		})
 
-	completed := stageNames(result.Stages)
-	t.Logf("Stages completed: %v", completed)
-	t.Logf("Files added: %v", result.FilesAdded)
-	t.Logf("Commit: %s", strings.Split(msg, "\n")[0])
-}
+		It("should exit successfully", func() {
+			Expect(result.ExitCode).To(Equal(0), "jorm output:\n%s", result.Output)
+		})
 
-func TestCalibration_Issue3_LoggingMiddleware(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
-	}
+		It("should compile", func() {
+			Expect(result.Compiles).To(BeTrue())
+		})
 
-	workDir := cloneCalibrationRepo(t)
-	result := runJorm(t, workDir, "3")
+		It("should pass all tests", func() {
+			Expect(result.TestsPass).To(BeTrue())
+		})
 
-	if result.ExitCode != 0 {
-		t.Fatalf("jorm exited with code %d:\n%s", result.ExitCode, result.Output)
-	}
+		It("should create the health handler", func() {
+			Expect(HasFile(workDir, "internal/handler/health.go")).To(BeTrue())
+		})
 
-	if !result.Compiles {
-		t.Error("FAIL: code does not compile")
-	}
-	if !result.TestsPass {
-		t.Error("FAIL: tests do not pass")
-	}
+		It("should create health handler tests", func() {
+			Expect(HasFile(workDir, "internal/handler/health_test.go")).To(BeTrue())
+		})
 
-	// Middleware file should exist
-	if !hasFile(workDir, "internal/middleware/logging.go") {
-		t.Error("FAIL: internal/middleware/logging.go not created")
-	}
+		It("should include Closes #2 in the commit message", func() {
+			msg := CommitMessage(workDir)
+			Expect(msg).To(ContainSubstring("Closes #2"))
+		})
+	})
 
-	// Middleware tests should exist
-	if !hasFile(workDir, "internal/middleware/logging_test.go") {
-		t.Error("FAIL: internal/middleware/logging_test.go not created")
-	}
+	Describe("Issue 3: Logging Middleware (STANDARD)", func() {
+		var (
+			workDir string
+			result  *RunResult
+		)
 
-	msg := commitMessage(t, workDir)
-	if !strings.Contains(msg, "Closes #3") {
-		t.Errorf("FAIL: commit message missing 'Closes #3': %s", msg)
-	}
+		BeforeAll(func() {
+			dir, err := os.MkdirTemp("", "jorm-e2e-issue3-*")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(os.RemoveAll, dir)
 
-	completed := stageNames(result.Stages)
-	t.Logf("Stages completed: %v", completed)
-	t.Logf("Files added: %v", result.FilesAdded)
-	t.Logf("Commit: %s", strings.Split(msg, "\n")[0])
-}
+			workDir, err = CloneCalibrationRepo(dir)
+			Expect(err).NotTo(HaveOccurred())
 
-func TestCalibration_Issue4_CacheRaceCondition(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
-	}
+			result, err = RunJorm(workDir, "3")
+			Expect(err).NotTo(HaveOccurred())
+		})
 
-	workDir := cloneCalibrationRepo(t)
-	result := runJorm(t, workDir, "4")
+		It("should exit successfully", func() {
+			Expect(result.ExitCode).To(Equal(0), "jorm output:\n%s", result.Output)
+		})
 
-	if result.ExitCode != 0 {
-		t.Fatalf("jorm exited with code %d:\n%s", result.ExitCode, result.Output)
-	}
+		It("should compile", func() {
+			Expect(result.Compiles).To(BeTrue())
+		})
 
-	if !result.Compiles {
-		t.Error("FAIL: code does not compile")
-	}
-	if !result.TestsPass {
-		t.Error("FAIL: tests do not pass")
-	}
+		It("should pass all tests", func() {
+			Expect(result.TestsPass).To(BeTrue())
+		})
 
-	// Verify the race detector passes (the key requirement for this issue)
-	if !checkTestsWithRace(workDir, "./internal/cache/...") {
-		t.Error("FAIL: go test -race ./internal/cache/... fails — race condition not fixed")
-	}
+		It("should create the logging middleware", func() {
+			Expect(HasFile(workDir, "internal/middleware/logging.go")).To(BeTrue())
+		})
 
-	msg := commitMessage(t, workDir)
-	if !strings.Contains(msg, "Closes #4") {
-		t.Errorf("FAIL: commit message missing 'Closes #4': %s", msg)
-	}
+		It("should create middleware tests", func() {
+			Expect(HasFile(workDir, "internal/middleware/logging_test.go")).To(BeTrue())
+		})
 
-	completed := stageNames(result.Stages)
-	t.Logf("Stages completed: %v", completed)
-	t.Logf("Commit: %s", strings.Split(msg, "\n")[0])
-}
+		It("should include Closes #3 in the commit message", func() {
+			msg := CommitMessage(workDir)
+			Expect(msg).To(ContainSubstring("Closes #3"))
+		})
 
-func TestCalibration_Issue5_UpdateUser(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping e2e test in short mode")
-	}
+		It("should wire middleware into main.go", func() {
+			data, err := os.ReadFile(workDir + "/cmd/server/main.go")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(strings.Contains(string(data), "middleware") || strings.Contains(string(data), "Logging")).To(BeTrue(),
+				"main.go should reference the logging middleware")
+		})
+	})
 
-	workDir := cloneCalibrationRepo(t)
-	result := runJorm(t, workDir, "5")
+	Describe("Issue 4: Cache Race Condition (DEBUG)", func() {
+		var (
+			workDir string
+			result  *RunResult
+		)
 
-	if result.ExitCode != 0 {
-		t.Fatalf("jorm exited with code %d:\n%s", result.ExitCode, result.Output)
-	}
+		BeforeAll(func() {
+			dir, err := os.MkdirTemp("", "jorm-e2e-issue4-*")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(os.RemoveAll, dir)
 
-	if !result.Compiles {
-		t.Error("FAIL: code does not compile")
-	}
-	if !result.TestsPass {
-		t.Error("FAIL: tests do not pass")
-	}
+			workDir, err = CloneCalibrationRepo(dir)
+			Expect(err).NotTo(HaveOccurred())
 
-	msg := commitMessage(t, workDir)
-	if !strings.Contains(msg, "Closes #5") {
-		t.Errorf("FAIL: commit message missing 'Closes #5': %s", msg)
-	}
+			result, err = RunJorm(workDir, "4")
+			Expect(err).NotTo(HaveOccurred())
+		})
 
-	completed := stageNames(result.Stages)
-	t.Logf("Stages completed: %v", completed)
-	t.Logf("Files added: %v", result.FilesAdded)
-	t.Logf("Commit: %s", strings.Split(msg, "\n")[0])
-}
+		It("should exit successfully", func() {
+			Expect(result.ExitCode).To(Equal(0), "jorm output:\n%s", result.Output)
+		})
 
-// checkTestsWithRace runs go test with the race detector for a specific package.
-func checkTestsWithRace(workDir, pkg string) bool {
-	cmd := exec.Command("go", "test", "-race", pkg)
-	cmd.Dir = workDir
-	return cmd.Run() == nil
-}
+		It("should compile", func() {
+			Expect(result.Compiles).To(BeTrue())
+		})
+
+		It("should pass all tests", func() {
+			Expect(result.TestsPass).To(BeTrue())
+		})
+
+		It("should pass the race detector", func() {
+			Expect(TestsPassWithRace(workDir, "./internal/cache/...")).To(BeTrue(),
+				"go test -race ./internal/cache/... should pass after fixing the race condition")
+		})
+
+		It("should include Closes #4 in the commit message", func() {
+			msg := CommitMessage(workDir)
+			Expect(msg).To(ContainSubstring("Closes #4"))
+		})
+
+		It("should add sync.RWMutex to Cache struct", func() {
+			data, err := os.ReadFile(workDir + "/internal/cache/cache.go")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(data)).To(ContainSubstring("sync.RWMutex"),
+				"Cache struct should use sync.RWMutex for thread safety")
+		})
+	})
+
+	Describe("Issue 5: UpdateUser Endpoint (STANDARD)", func() {
+		var (
+			workDir string
+			result  *RunResult
+		)
+
+		BeforeAll(func() {
+			dir, err := os.MkdirTemp("", "jorm-e2e-issue5-*")
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(os.RemoveAll, dir)
+
+			workDir, err = CloneCalibrationRepo(dir)
+			Expect(err).NotTo(HaveOccurred())
+
+			result, err = RunJorm(workDir, "5")
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("should exit successfully", func() {
+			Expect(result.ExitCode).To(Equal(0), "jorm output:\n%s", result.Output)
+		})
+
+		It("should compile", func() {
+			Expect(result.Compiles).To(BeTrue())
+		})
+
+		It("should pass all tests", func() {
+			Expect(result.TestsPass).To(BeTrue())
+		})
+
+		It("should add Update method to Store interface", func() {
+			data, err := os.ReadFile(workDir + "/internal/store/store.go")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(data)).To(ContainSubstring("Update("),
+				"Store interface should have an Update method")
+		})
+
+		It("should register PATCH /users/{id} route", func() {
+			data, err := os.ReadFile(workDir + "/cmd/server/main.go")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(data)).To(ContainSubstring("PATCH"),
+				"main.go should register a PATCH route")
+		})
+
+		It("should include Closes #5 in the commit message", func() {
+			msg := CommitMessage(workDir)
+			Expect(msg).To(ContainSubstring("Closes #5"))
+		})
+	})
+})
