@@ -166,25 +166,3 @@ func BuildStageScopedWorkerContext(b *bus.Bus, clusterID string, stageIndex int,
 	return strings.Join(sections, "\n\n"), nil
 }
 
-// BuildCompletionContext assembles context for the completion detector:
-// all validation results.
-func BuildCompletionContext(b *bus.Bus, clusterID string) (string, error) {
-	results, err := b.Query(clusterID, bus.QueryOpts{
-		Topics: []string{bus.TopicValidationResult},
-	})
-	if err != nil {
-		return "", err
-	}
-
-	var lines []string
-	for _, r := range results {
-		approved, _ := r.Data["approved"].(bool)
-		status := "REJECTED"
-		if approved {
-			status = "APPROVED"
-		}
-		lines = append(lines, fmt.Sprintf("- %s: %s", r.Sender, status))
-	}
-
-	return "## Validation Results\n\n" + strings.Join(lines, "\n"), nil
-}

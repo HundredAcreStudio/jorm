@@ -310,11 +310,15 @@ func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
 		a.sink.AgentTaskFailed(a.Config.ID, a.Iteration, err)
 		a.sink.ClaudeOutput(fmt.Sprintf("[%s] error: %v", a.Config.Name, err))
 		if a.Config.Role == "validator" {
+			errOnFail := a.Config.OnFail
+			if errOnFail == "" {
+				errOnFail = "reject"
+			}
 			a.sink.ValidatorDone(agent.ValidatorResult{
 				ValidatorID: a.Config.ID,
 				Name:        a.Config.Name,
 				Passed:      false,
-				OnFail:      "reject",
+				OnFail:      errOnFail,
 				Output:      fmt.Sprintf("error: %v", err),
 			})
 		}
@@ -342,11 +346,15 @@ func (a *Agent) ExecuteOnce(ctx context.Context) (*AgentResult, error) {
 	}
 
 	if a.Config.Role == "validator" {
+		claudeOnFail := a.Config.OnFail
+		if claudeOnFail == "" {
+			claudeOnFail = "reject"
+		}
 		a.sink.ValidatorDone(agent.ValidatorResult{
 			ValidatorID: a.Config.ID,
 			Name:        a.Config.Name,
 			Passed:      approved,
-			OnFail:      "reject",
+			OnFail:      claudeOnFail,
 			Output:      result.Text,
 		})
 	}

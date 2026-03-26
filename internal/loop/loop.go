@@ -56,14 +56,12 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	// Apply model override from CLI
+	// Apply CLI overrides to config
 	if opts.Model != "" {
 		cfg.Model = opts.Model
 	}
-
-	profile := cfg.Profile
 	if opts.Profile != "" {
-		profile = opts.Profile
+		cfg.Profile = opts.Profile
 	}
 
 	st, err := store.New()
@@ -96,7 +94,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	if opts.Resume {
-		return resume(ctx, cfg, st, profile, opts, sink)
+		return resume(ctx, cfg, st, cfg.Profile, opts, sink)
 	}
 
 	// Fetch issue
