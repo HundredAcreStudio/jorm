@@ -301,9 +301,14 @@ func issueEnv(base []string, iss *issue.Issue, provider string) []string {
 	if iss.URL != "" {
 		env = append(env, "JORM_ISSUE_URL="+iss.URL)
 	}
-	// Add closes reference for GitHub/Jira issues with numeric/key IDs
-	if (provider == "github" || provider == "jira") && iss.ID != "" {
-		env = append(env, "JORM_CLOSES_REF=Closes #"+iss.ID)
+	// Add closes reference for issues with IDs
+	if iss.ID != "" {
+		switch provider {
+		case "github":
+			env = append(env, "JORM_CLOSES_REF=Closes #"+iss.ID)
+		case "jira":
+			env = append(env, "JORM_CLOSES_REF=Closes "+iss.ID)
+		}
 	}
 	return env
 }

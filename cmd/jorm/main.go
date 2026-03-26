@@ -478,14 +478,21 @@ func truncate(s string, max int) string {
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
 		s = s[:idx]
 	}
-	if len(s) > max {
-		return s[:max-3] + "..."
+	runes := []rune(s)
+	if len(runes) > max {
+		return string(runes[:max-3]) + "..."
 	}
 	return s
 }
 
 func cleanRun(st *store.Store, r *store.RunState) error {
 	if r.WorktreeDir != "" {
+		// Check for uncommitted changes before destroying worktree
+		cmd := exec.Command("git", "status", "--porcelain")
+		cmd.Dir = r.WorktreeDir
+		if out, err := cmd.Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			fmt.Fprintf(os.Stderr, "Warning: worktree %s has uncommitted changes, removing anyway\n", r.WorktreeDir)
+		}
 		os.RemoveAll(r.WorktreeDir)
 	}
 	if err := st.Delete(r.ID); err != nil {

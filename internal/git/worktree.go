@@ -52,21 +52,12 @@ func (w *Worktree) Diff() (string, error) {
 		return "", err
 	}
 
-	// Include both committed and uncommitted changes by diffing base against the working tree.
-	// First, get committed changes (base...HEAD)
-	cmd := exec.Command("git", "diff", base+"...HEAD")
+	// Single unified diff: base against working tree (committed + uncommitted in one pass).
+	cmd := exec.Command("git", "diff", base)
 	cmd.Dir = w.Dir
-	committed, err := cmd.Output()
+	diff, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("getting committed diff: %w", err)
-	}
-
-	// Then, get uncommitted changes (staged + unstaged)
-	cmd = exec.Command("git", "diff", "HEAD")
-	cmd.Dir = w.Dir
-	uncommitted, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("getting uncommitted diff: %w", err)
+		return "", fmt.Errorf("getting diff: %w", err)
 	}
 
 	// Also check for untracked files
@@ -77,10 +68,8 @@ func (w *Worktree) Diff() (string, error) {
 		return "", fmt.Errorf("listing untracked files: %w", err)
 	}
 
-	// Build combined diff
 	var combined strings.Builder
-	combined.Write(committed)
-	combined.Write(uncommitted)
+	combined.Write(diff)
 
 	// For untracked files, generate a diff-like output
 	for _, f := range strings.Split(strings.TrimSpace(string(untracked)), "\n") {

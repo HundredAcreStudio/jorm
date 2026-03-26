@@ -34,7 +34,7 @@ func (r *Runner) OnComplete(ctx context.Context) error {
 			errMsg := fmt.Sprintf("Hook %q failed: %v\nOutput: %s", cmd, err, output)
 			r.sink.Phase(errMsg)
 			r.sink.ClaudeOutput(errMsg)
-			return fmt.Errorf("%s", errMsg)
+			return fmt.Errorf("on_complete hook %q: %w", cmd, err)
 		}
 		r.sink.Phase(fmt.Sprintf("✓ %s", cmd))
 	}
