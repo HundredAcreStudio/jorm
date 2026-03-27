@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jorm/internal/jormpath"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -29,14 +30,12 @@ type Store struct {
 	db *sql.DB
 }
 
-// New opens (or creates) the SQLite database at ~/.jorm/jorm.db.
+// New opens (or creates) the SQLite database at ~/.jorm/jorm.db (or $JORM_HOME/jorm.db).
 func New() (*Store, error) {
-	home, err := os.UserHomeDir()
+	dir, err := jormpath.StoreDir()
 	if err != nil {
-		return nil, fmt.Errorf("getting home dir: %w", err)
+		return nil, fmt.Errorf("getting data dir: %w", err)
 	}
-
-	dir := filepath.Join(home, ".jorm")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating store dir: %w", err)
 	}

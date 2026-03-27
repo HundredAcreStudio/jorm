@@ -84,7 +84,10 @@ func RunJorm(workDir string, issueID string) (*RunResult, error) {
 
 	cmd := exec.Command(bin, "run", issueID)
 	cmd.Dir = workDir
-	cmd.Env = append(os.Environ(), "JORM_BINARY="+bin)
+
+	// Each parallel test gets an isolated DB via JORM_HOME
+	jormHome := filepath.Join(workDir, ".jorm-data")
+	cmd.Env = append(os.Environ(), "JORM_BINARY="+bin, "JORM_HOME="+jormHome)
 
 	var outBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -103,7 +106,7 @@ func RunJorm(workDir string, issueID string) (*RunResult, error) {
 	defer cancel()
 
 	stalledCh := make(chan struct{}, 1)
-	go watchBusActivity(ctx, issueID, stalledCh)
+	go watchBusActivity(ctx, jormHome, issueID, stalledCh)
 
 	var err error
 	select {
@@ -132,8 +135,7 @@ func RunJorm(workDir string, issueID string) (*RunResult, error) {
 	}
 
 	// Find log file (most recent for this issue)
-	home, _ := os.UserHomeDir()
-	logDir := filepath.Join(home, ".jorm", "logs")
+	logDir := filepath.Join(workDir, ".jorm", "logs")
 	entries, _ := os.ReadDir(logDir)
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), issueID+"-") {
@@ -155,11 +157,10 @@ func RunJorm(workDir string, issueID string) (*RunResult, error) {
 // watchBusActivity polls the jorm SQLite DB for message bus activity.
 // It sends on stalled if no new messages appear for stallTimeout.
 // It returns silently if ctx is cancelled (process finished normally).
-func watchBusActivity(ctx context.Context, issueID string, stalled chan<- struct{}) {
-	home, _ := os.UserHomeDir()
-	dbPath := filepath.Join(home, ".jorm", "jorm.db")
+func watchBusActivity(ctx context.Context, storeDir string, issueID string, stalled chan<- struct{}) {
+	dbPath := filepath.Join(storeDir, "jorm.db")
 
-	db, err := sql.Open("sqlite3", dbPath+"?mode=ro&_journal_mode=WAL")
+	db, err := sql.Open("sqlite3", dbPath+"?mode=ro")
 	if err != nil {
 		return // can't monitor — don't interfere with the run
 	}

@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/jorm/internal/jormpath"
 )
 
 // Logger provides structured logging with contextual fields.
@@ -13,15 +15,15 @@ type Logger struct {
 	file   *os.File
 }
 
-// New creates a structured logger. Logs to ~/.jorm/logs/<runID>.log.
+// New creates a structured logger. Logs to .jorm/logs/<runID>.log in the project directory.
 // If debug is true, also logs at debug level.
 func New(runID string, debug bool) (*Logger, error) {
-	home, err := os.UserHomeDir()
+	dataDir, err := jormpath.ProjectDir()
 	if err != nil {
-		return nil, fmt.Errorf("getting home dir: %w", err)
+		return nil, fmt.Errorf("getting data dir: %w", err)
 	}
 
-	logDir := filepath.Join(home, ".jorm", "logs")
+	logDir := filepath.Join(dataDir, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating log dir: %w", err)
 	}

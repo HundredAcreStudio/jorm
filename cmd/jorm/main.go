@@ -19,6 +19,7 @@ import (
 	"github.com/jorm/internal/config"
 	"github.com/jorm/internal/conductor"
 	"github.com/jorm/internal/events"
+	"github.com/jorm/internal/jormpath"
 	"github.com/jorm/internal/loop"
 	"github.com/jorm/internal/mcp"
 	"github.com/jorm/internal/store"
@@ -225,11 +226,11 @@ func main() {
 		Short: "View logs for a run",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			home, err := os.UserHomeDir()
+			projDir, err := jormpath.ProjectDir()
 			if err != nil {
 				return err
 			}
-			logPath := filepath.Join(home, ".jorm", "logs", args[0]+".log")
+			logPath := filepath.Join(projDir, "logs", args[0]+".log")
 
 			if followFlag {
 				c := exec.Command("tail", "-f", logPath)
@@ -254,11 +255,11 @@ func main() {
 		Short: "Signal a running jorm process to stop",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			home, err := os.UserHomeDir()
+			storeDir, err := jormpath.StoreDir()
 			if err != nil {
 				return err
 			}
-			signalPath := filepath.Join(home, ".jorm", fmt.Sprintf("stop-%s", args[0]))
+			signalPath := filepath.Join(storeDir, fmt.Sprintf("stop-%s", args[0]))
 			if err := os.WriteFile(signalPath, []byte("stop"), 0o644); err != nil {
 				return fmt.Errorf("writing stop signal: %w", err)
 			}
@@ -523,15 +524,19 @@ func newMCPCmd() *cobra.Command {
 		Short: "Start the MCP server on stdio for run monitoring and log analysis",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if dbFlag == "" || logsFlag == "" {
-				home, err := os.UserHomeDir()
+				storeDir, err := jormpath.StoreDir()
 				if err != nil {
 					return err
 				}
 				if dbFlag == "" {
-					dbFlag = filepath.Join(home, ".jorm", "jorm.db")
+					dbFlag = filepath.Join(storeDir, "jorm.db")
 				}
 				if logsFlag == "" {
-					logsFlag = filepath.Join(home, ".jorm", "logs")
+					projDir, err := jormpath.ProjectDir()
+					if err != nil {
+						return err
+					}
+					logsFlag = filepath.Join(projDir, "logs")
 				}
 			}
 			return mcp.NewServer(dbFlag, logsFlag).Run()
