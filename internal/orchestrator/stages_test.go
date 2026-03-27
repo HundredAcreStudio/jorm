@@ -445,6 +445,72 @@ func TestStageOrchestrator_CleanupStage_SkipsWhenNoNotes(t *testing.T) {
 	}
 }
 
+// TestStageOrchestrator_CleanupStage_RunsWorkerWhenNitNotesExist verifies that when an
+// approved VALIDATION_RESULT with "Nit:" notes is on the bus (new format from updated
+// pr-review.md), the cleanup stage invokes the worker, and CLUSTER_COMPLETE is published.
+func TestStageOrchestrator_CleanupStage_RunsWorkerWhenNitNotesExist(t *testing.T) {
+	b := newTestBus(t)
+	tmpDir := t.TempDir()
+
+	workerSentinel := filepath.Join(tmpDir, "worker-ran-nit.txt")
+
+	// Seed bus with an approved VALIDATION_RESULT containing a Nit: note (new format)
+	b.Publish(bus.Message{
+		ClusterID: "test-cluster",
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nNit: context.go:42 — variable name could be clearer",
+		Data:      map[string]any{"approved": true},
+	})
+
+	sink := &fakeSink{}
+	wt := &gitpkg.Worktree{Dir: tmpDir, RepoDir: tmpDir}
+
+	workerCfg := AgentConfig{
+		ID:            "worker",
+		Name:          "Worker",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       fmt.Sprintf(`touch "%s"`, workerSentinel),
+	}
+	testerCfg := AgentConfig{
+		ID:            "tester",
+		Name:          "Tester",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "true",
+	}
+
+	stages := []Stage{
+		{
+			Name: "Cleanup",
+			Kind: StageKindCleanup,
+		},
+	}
+
+	so := NewStageOrchestrator(b, &config.Config{}, wt, sink, nil,
+		"test-cluster", workerCfg, testerCfg, stages)
+
+	err := so.Run(context.Background(), testIssue())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Worker must have run because Nit: note triggered cleanup
+	if _, statErr := os.Stat(workerSentinel); os.IsNotExist(statErr) {
+		t.Error("expected worker to be invoked when Nit: notes exist, but sentinel file not found")
+	}
+
+	// CLUSTER_COMPLETE must be published
+	completeMsgs, err := b.Query("test-cluster", bus.QueryOpts{Topics: []string{bus.TopicClusterComplete}})
+	if err != nil {
+		t.Fatalf("querying bus: %v", err)
+	}
+	if len(completeMsgs) == 0 {
+		t.Error("expected CLUSTER_COMPLETE after cleanup stage with Nit: notes")
+	}
+}
+
 // TestStageOrchestrator_CleanupStage_RunsWorkerWhenNotesExist verifies that when an
 // approved VALIDATION_RESULT with LOW: notes is on the bus, the cleanup stage invokes
 // the worker and then the tester, and CLUSTER_COMPLETE is published on success.

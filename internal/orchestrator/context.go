@@ -220,8 +220,8 @@ func BuildTestWriterContext(b *bus.Bus, clusterID string) (string, error) {
 }
 
 // CollectReviewerNotes queries all approved VALIDATION_RESULT messages and extracts
-// notes containing "LOW:" — from both bare lines and JSON "notes" arrays.
-// Returns a deduplicated slice.
+// notes containing "Nit:" (primary) or "LOW:" (legacy) — from both bare lines and
+// JSON "notes" arrays. Returns a deduplicated slice.
 func CollectReviewerNotes(b *bus.Bus, clusterID string) ([]string, error) {
 	msgs, err := b.Query(clusterID, bus.QueryOpts{
 		Topics: []string{bus.TopicValidationResult},
@@ -248,7 +248,7 @@ func CollectReviewerNotes(b *bus.Bus, clusterID string) ([]string, error) {
 		}
 
 		// Strategy 1: Parse JSON "notes" array from the content.
-		// Reviewers output: {"approved": true, "errors": [], "notes": ["LOW: ...", ...]}
+		// Reviewers output: {"approved": true, "errors": [], "notes": ["Nit: ...", ...]}
 		if idx := strings.Index(m.Content, `"notes"`); idx >= 0 {
 			// Find the array start
 			rest := m.Content[idx:]
@@ -259,7 +259,7 @@ func CollectReviewerNotes(b *bus.Bus, clusterID string) ([]string, error) {
 					var jsonNotes []string
 					if json.Unmarshal([]byte(arrStr), &jsonNotes) == nil {
 						for _, n := range jsonNotes {
-							if strings.Contains(n, "LOW:") {
+							if strings.Contains(n, "Nit:") || strings.Contains(n, "LOW:") {
 								addNote(n, m.Sender)
 							}
 						}
@@ -268,10 +268,10 @@ func CollectReviewerNotes(b *bus.Bus, clusterID string) ([]string, error) {
 			}
 		}
 
-		// Strategy 2: Scan bare lines for "LOW:" prefix (fallback for non-JSON output).
+		// Strategy 2: Scan bare lines for "Nit:" or "LOW:" prefix (fallback for non-JSON output).
 		for _, line := range strings.Split(m.Content, "\n") {
 			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "LOW:") {
+			if strings.HasPrefix(trimmed, "Nit:") || strings.HasPrefix(trimmed, "LOW:") {
 				addNote(trimmed, m.Sender)
 			}
 		}

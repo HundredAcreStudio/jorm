@@ -477,6 +477,162 @@ func TestCollectReviewerNotes_MixedApprovalStatuses(t *testing.T) {
 	}
 }
 
+// TestCollectReviewerNotes_NitPrefixCollected verifies that "Nit:" prefix bare lines are
+// extracted from approved VALIDATION_RESULT messages (new format from updated pr-review.md).
+func TestCollectReviewerNotes_NitPrefixCollected(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nNit: foo.go:12 — variable name is unclear\nNit: Consider extracting helper",
+		Data:      map[string]any{"approved": true},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) == 0 {
+		t.Fatal("expected Nit: lines to be extracted from approved VALIDATION_RESULT")
+	}
+
+	var foundName, foundHelper bool
+	for _, n := range notes {
+		if contains(n, "variable name is unclear") {
+			foundName = true
+		}
+		if contains(n, "Consider extracting helper") {
+			foundHelper = true
+		}
+	}
+	if !foundName {
+		t.Errorf("expected Nit: naming note to be collected, got: %v", notes)
+	}
+	if !foundHelper {
+		t.Errorf("expected Nit: helper note to be collected, got: %v", notes)
+	}
+}
+
+// TestCollectReviewerNotes_JSONEmbeddedNitNotes verifies that "Nit:" notes inside a JSON
+// "notes" array are extracted — this is the format the updated pr-review.md produces.
+func TestCollectReviewerNotes_JSONEmbeddedNitNotes(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	content := `I've reviewed the diff.
+
+` + "```json\n" + `{
+  "approved": true,
+  "errors": [],
+  "notes": [
+    "Nit: context.go:42 — variable name ctx shadows outer ctx",
+    "Nit: stages.go:88 — comment explains what, not why"
+  ]
+}
+` + "```\n\nVERDICT: ACCEPT"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   content,
+		Data:      map[string]any{"approved": true},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) == 0 {
+		t.Fatal("expected Nit: notes from JSON-embedded format to be collected")
+	}
+
+	var foundShadow, foundComment bool
+	for _, n := range notes {
+		if contains(n, "shadows outer ctx") {
+			foundShadow = true
+		}
+		if contains(n, "comment explains what") {
+			foundComment = true
+		}
+	}
+	if !foundShadow {
+		t.Errorf("expected ctx shadow Nit: note, got: %v", notes)
+	}
+	if !foundComment {
+		t.Errorf("expected comment Nit: note, got: %v", notes)
+	}
+}
+
+// TestCollectReviewerNotes_LowPrefixBackwardCompat verifies that "LOW:" bare lines are
+// still collected alongside "Nit:" — backward compatibility with older reviewer output.
+func TestCollectReviewerNotes_LowPrefixBackwardCompat(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: legacy note from old reviewer format",
+		Data:      map[string]any{"approved": true},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var found bool
+	for _, n := range notes {
+		if contains(n, "legacy note from old reviewer format") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected LOW: legacy note to still be collected for backward compat, got: %v", notes)
+	}
+}
+
+// TestCollectReviewerNotes_MixedNitAndLow verifies that both "Nit:" and "LOW:" prefixed
+// lines are collected in the same message.
+func TestCollectReviewerNotes_MixedNitAndLow(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nNit: new style note\nLOW: old style note",
+		Data:      map[string]any{"approved": true},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var foundNit, foundLow bool
+	for _, n := range notes {
+		if contains(n, "new style note") {
+			foundNit = true
+		}
+		if contains(n, "old style note") {
+			foundLow = true
+		}
+	}
+	if !foundNit {
+		t.Errorf("expected Nit: note to be collected, got: %v", notes)
+	}
+	if !foundLow {
+		t.Errorf("expected LOW: note to be collected alongside Nit:, got: %v", notes)
+	}
+}
+
 // TestCollectReviewerNotes_DeduplicatesNotes verifies that duplicate LOW: lines across
 // multiple approved messages appear only once in the result.
 func TestCollectReviewerNotes_DeduplicatesNotes(t *testing.T) {
