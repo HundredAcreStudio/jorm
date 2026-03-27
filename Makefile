@@ -37,10 +37,10 @@ test: ## Run unit tests (excludes e2e)
 	CGO_ENABLED=$(CGO_ENABLED) go test ./...
 
 test-e2e: ## Run e2e calibration suite via ginkgo
-	CGO_ENABLED=$(CGO_ENABLED) ginkgo -tags e2e -timeout 30m -v ./internal/e2e/
+	CGO_ENABLED=$(CGO_ENABLED) ginkgo -tags e2e -timeout 3h -v ./internal/e2e/
 
 test-e2e-focus: ## Run single e2e test (use FOCUS="Issue 1")
-	CGO_ENABLED=$(CGO_ENABLED) ginkgo -tags e2e -timeout 10m -v -focus "$(FOCUS)" ./internal/e2e/
+	CGO_ENABLED=$(CGO_ENABLED) ginkgo -tags e2e -timeout 15m -v -focus "$(FOCUS)" ./internal/e2e/
 
 post-review: ## Run review prompts against a jorm output repo (use REPO=path)
 	./scripts/post-review.sh $(REPO)

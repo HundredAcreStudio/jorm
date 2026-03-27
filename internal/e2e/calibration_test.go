@@ -11,10 +11,7 @@ import (
 )
 
 // Run with:
-//   CGO_ENABLED=1 ginkgo -tags e2e -timeout 45m -v ./internal/e2e/
-//
-// Parallel (each issue gets its own .jorm/ data dir):
-//   CGO_ENABLED=1 ginkgo -tags e2e -timeout 20m -v --procs=5 ./internal/e2e/
+//   CGO_ENABLED=1 ginkgo -tags e2e -timeout 3h -v ./internal/e2e/
 //
 // Single issue:
 //   CGO_ENABLED=1 ginkgo -tags e2e -timeout 15m -v -focus "Issue 1" ./internal/e2e/

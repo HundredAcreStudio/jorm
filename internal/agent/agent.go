@@ -61,7 +61,7 @@ func RunClaude(ctx context.Context, opts RunOptions) (*ClaudeResult, error) {
 		"--allowedTools", "Bash,Read,Write,Edit,MultiEdit,Glob,Grep",
 		"--max-turns", "30",
 		"--model", resolved,
-		"-p", opts.Prompt,
+		"-p", "-",
 	}
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
@@ -69,6 +69,10 @@ func RunClaude(ctx context.Context, opts RunOptions) (*ClaudeResult, error) {
 	if opts.Env != nil {
 		cmd.Env = opts.Env
 	}
+
+	// Pass prompt via stdin to avoid ARG_MAX limits on macOS (~1MB).
+	// Review prompts can exceed this when they include full file contents.
+	cmd.Stdin = strings.NewReader(opts.Prompt)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
