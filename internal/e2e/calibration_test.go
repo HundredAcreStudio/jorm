@@ -11,10 +11,10 @@ import (
 )
 
 // Run with:
-//   CGO_ENABLED=1 go test -tags e2e -timeout 30m -v ./internal/e2e/
+//   CGO_ENABLED=1 go test -tags e2e -timeout 45m -v ./internal/e2e/
 //
 // Single issue:
-//   CGO_ENABLED=1 go test -tags e2e -timeout 10m -v -focus "Issue 1" ./internal/e2e/
+//   CGO_ENABLED=1 go test -tags e2e -timeout 15m -v -focus "Issue 1" ./internal/e2e/
 
 var _ = Describe("Calibration", func() {
 

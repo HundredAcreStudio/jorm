@@ -3,11 +3,17 @@
 package e2e
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const (
@@ -58,7 +64,18 @@ type StageEvent struct {
 	Event string // "started" or "completed"
 }
 
+const (
+	// stallTimeout is how long RunJorm tolerates silence on the message bus
+	// before concluding the run is hung and killing it.
+	stallTimeout = 3 * time.Minute
+
+	// pollInterval is how often we check the message bus for new activity.
+	pollInterval = 5 * time.Second
+)
+
 // RunJorm executes jorm against an issue in the given work directory.
+// It monitors the SQLite message bus for activity and kills the process
+// if no new messages appear within stallTimeout.
 func RunJorm(workDir string, issueID string) (*RunResult, error) {
 	bin := JormBinary()
 	if bin == "" {
@@ -69,7 +86,35 @@ func RunJorm(workDir string, issueID string) (*RunResult, error) {
 	cmd.Dir = workDir
 	cmd.Env = append(os.Environ(), "JORM_BINARY="+bin)
 
-	out, err := cmd.CombinedOutput()
+	var outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting jorm: %w", err)
+	}
+
+	// Wait for process in background
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- cmd.Wait() }()
+
+	// Monitor message bus; closes stalled channel if no activity for stallTimeout
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stalledCh := make(chan struct{}, 1)
+	go watchBusActivity(ctx, issueID, stalledCh)
+
+	var err error
+	select {
+	case err = <-waitErr:
+		cancel()
+	case <-stalledCh:
+		cmd.Process.Kill()
+		<-waitErr
+		return nil, fmt.Errorf("jorm stalled: no message bus activity for %v", stallTimeout)
+	}
+
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -81,7 +126,7 @@ func RunJorm(workDir string, issueID string) (*RunResult, error) {
 
 	result := &RunResult{
 		ExitCode: exitCode,
-		Output:   string(out),
+		Output:   outBuf.String(),
 		WorkDir:  workDir,
 		IssueID:  issueID,
 	}
@@ -105,6 +150,62 @@ func RunJorm(workDir string, issueID string) (*RunResult, error) {
 	result.FilesAdded = AddedFiles(workDir)
 
 	return result, nil
+}
+
+// watchBusActivity polls the jorm SQLite DB for message bus activity.
+// It sends on stalled if no new messages appear for stallTimeout.
+// It returns silently if ctx is cancelled (process finished normally).
+func watchBusActivity(ctx context.Context, issueID string, stalled chan<- struct{}) {
+	home, _ := os.UserHomeDir()
+	dbPath := filepath.Join(home, ".jorm", "jorm.db")
+
+	db, err := sql.Open("sqlite3", dbPath+"?mode=ro&_journal_mode=WAL")
+	if err != nil {
+		return // can't monitor — don't interfere with the run
+	}
+	defer db.Close()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	var runID string
+	var msgCount int
+	lastActivity := time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		// Find the run ID if we haven't yet
+		if runID == "" {
+			_ = db.QueryRowContext(ctx,
+				"SELECT id FROM runs WHERE issue_id = ? ORDER BY created_at DESC LIMIT 1",
+				issueID,
+			).Scan(&runID)
+			if runID != "" {
+				lastActivity = time.Now()
+			}
+			continue
+		}
+
+		// Count messages — any increase means progress
+		var count int
+		if err := db.QueryRowContext(ctx,
+			"SELECT COUNT(*) FROM messages WHERE cluster_id = ?",
+			runID,
+		).Scan(&count); err == nil && count > msgCount {
+			msgCount = count
+			lastActivity = time.Now()
+		}
+
+		if time.Since(lastActivity) > stallTimeout {
+			stalled <- struct{}{}
+			return
+		}
+	}
 }
 
 // parseStages extracts stage events from the log file.
