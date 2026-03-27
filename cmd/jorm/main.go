@@ -455,7 +455,18 @@ func main() {
 		},
 	}
 
-	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd, versionCmd, newDemoCmd(), newMCPCmd())
+	// Hide commands that assume daemon/background mode or aren't implemented yet.
+	// They still work if typed directly — just hidden from --help.
+	resumeCmd.Hidden = true
+	statusCmd.Hidden = true
+	stopCmd.Hidden = true
+	cleanCmd.Hidden = true
+	inspectCmd.Hidden = true
+	initCmd.Hidden = true
+	demoCmd := newDemoCmd()
+	demoCmd.Hidden = true
+
+	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd, versionCmd, demoCmd, newMCPCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
