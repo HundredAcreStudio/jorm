@@ -1,6 +1,9 @@
 package orchestrator
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jorm/internal/bus"
@@ -637,5 +640,227 @@ func TestBuildStageScopedWorkerContext_Float64StageIndex(t *testing.T) {
 	}
 	if !contains(result, "Rejection via JSON") {
 		t.Error("expected float64 stage_index to match")
+	}
+}
+
+// --- BuildRichValidatorContext tests ---
+
+// TestBuildRichValidatorContext_IncludesChangedFileContent verifies that the full content
+// of a file referenced in the diff is included in the output.
+func TestBuildRichValidatorContext_IncludesChangedFileContent(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+	workDir := t.TempDir()
+
+	fileContent := "package main\n\nfunc Hello() string { return \"hello\" }\n"
+	if err := os.WriteFile(filepath.Join(workDir, "hello.go"), []byte(fileContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := "diff --git a/hello.go b/hello.go\n--- a/hello.go\n+++ b/hello.go\n@@ -1 +1 @@\n+package main\n"
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicImplementationReady,
+		Sender:    "worker",
+		Content:   diff,
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildRichValidatorContext(b, clusterID, workDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, "## Changed Files (full content)") {
+		t.Error("expected '## Changed Files (full content)' section")
+	}
+	if !contains(result, fileContent) {
+		t.Error("expected full file content to be included in output")
+	}
+}
+
+// TestBuildRichValidatorContext_IncludesCLAUDEMD verifies that CLAUDE.md from the workDir
+// is included under "Project Conventions".
+func TestBuildRichValidatorContext_IncludesCLAUDEMD(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+	workDir := t.TempDir()
+
+	claudeMDContent := "# Project Conventions\n\nUse gofmt. Write tests.\n"
+	if err := os.WriteFile(filepath.Join(workDir, "CLAUDE.md"), []byte(claudeMDContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicImplementationReady,
+		Sender:    "worker",
+		Content:   "diff --git a/foo.go b/foo.go\n",
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildRichValidatorContext(b, clusterID, workDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, "## Project Conventions (CLAUDE.md)") {
+		t.Error("expected '## Project Conventions (CLAUDE.md)' section")
+	}
+	if !contains(result, claudeMDContent) {
+		t.Error("expected CLAUDE.md content in output")
+	}
+}
+
+// TestBuildRichValidatorContext_IncludesGoMod verifies that go.mod from the workDir
+// is included under "Dependency Manifest".
+func TestBuildRichValidatorContext_IncludesGoMod(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+	workDir := t.TempDir()
+
+	goModContent := "module github.com/example/project\n\ngo 1.21\n"
+	if err := os.WriteFile(filepath.Join(workDir, "go.mod"), []byte(goModContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicImplementationReady,
+		Sender:    "worker",
+		Content:   "diff --git a/foo.go b/foo.go\n",
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildRichValidatorContext(b, clusterID, workDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, "## Dependency Manifest (go.mod)") {
+		t.Error("expected '## Dependency Manifest (go.mod)' section")
+	}
+	if !contains(result, goModContent) {
+		t.Error("expected go.mod content in output")
+	}
+}
+
+// TestBuildRichValidatorContext_IncludesTestFile verifies that when a .go file is referenced
+// in the diff, the corresponding _test.go file is also included if it exists.
+func TestBuildRichValidatorContext_IncludesTestFile(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+	workDir := t.TempDir()
+
+	srcContent := "package foo\n\nfunc Add(a, b int) int { return a + b }\n"
+	testContent := "package foo\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) {}\n"
+	if err := os.WriteFile(filepath.Join(workDir, "foo.go"), []byte(srcContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "foo_test.go"), []byte(testContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := "diff --git a/foo.go b/foo.go\n--- a/foo.go\n+++ b/foo.go\n@@ -1 +1 @@\n+package foo\n"
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicImplementationReady,
+		Sender:    "worker",
+		Content:   diff,
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildRichValidatorContext(b, clusterID, workDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, srcContent) {
+		t.Error("expected source file content in output")
+	}
+	if !contains(result, testContent) {
+		t.Error("expected test file content to be auto-included in output")
+	}
+}
+
+// TestBuildRichValidatorContext_SkipsDeletedFiles verifies that when the diff references
+// a file that doesn't exist in workDir, the function returns without error.
+func TestBuildRichValidatorContext_SkipsDeletedFiles(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+	workDir := t.TempDir()
+
+	diff := "diff --git a/deleted.go b/deleted.go\n--- a/deleted.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-package old\n"
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicImplementationReady,
+		Sender:    "worker",
+		Content:   diff,
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildRichValidatorContext(b, clusterID, workDir)
+	if err != nil {
+		t.Fatalf("expected no error for deleted/missing file, got: %v", err)
+	}
+
+	// Result may be empty or contain the diff section, but must not panic
+	_ = result
+}
+
+// TestBuildRichValidatorContext_SkipsMissingCLAUDEMD verifies that when CLAUDE.md is absent,
+// the "Project Conventions" section is not included.
+func TestBuildRichValidatorContext_SkipsMissingCLAUDEMD(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+	workDir := t.TempDir()
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicImplementationReady,
+		Sender:    "worker",
+		Content:   "diff --git a/foo.go b/foo.go\n",
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildRichValidatorContext(b, clusterID, workDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contains(result, "## Project Conventions (CLAUDE.md)") {
+		t.Error("expected no 'Project Conventions' section when CLAUDE.md is absent")
+	}
+}
+
+// TestBuildRichValidatorContext_TruncatesLargeFiles verifies that files larger than 100KB
+// are truncated with a "[...truncated" notice.
+func TestBuildRichValidatorContext_TruncatesLargeFiles(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+	workDir := t.TempDir()
+
+	// Write a 200KB file (well over the 100KB cap)
+	largeContent := strings.Repeat("x", 200*1024)
+	if err := os.WriteFile(filepath.Join(workDir, "large.go"), []byte(largeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	diff := "diff --git a/large.go b/large.go\n--- a/large.go\n+++ b/large.go\n@@ -1 +1 @@\n+x\n"
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicImplementationReady,
+		Sender:    "worker",
+		Content:   diff,
+		Data:      map[string]any{},
+	})
+
+	result, err := BuildRichValidatorContext(b, clusterID, workDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, "[...truncated") {
+		t.Error("expected '[...truncated' notice for file exceeding 100KB cap")
 	}
 }

@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/jorm/internal/bus"
@@ -62,6 +64,110 @@ func BuildWorkerContext(b *bus.Bus, clusterID string) (string, error) {
 		if len(findings) > 0 {
 			sections = append(sections, "## Previous attempt was rejected. Fix these issues:\n\n"+strings.Join(findings, "\n\n"))
 		}
+	}
+
+	return strings.Join(sections, "\n\n"), nil
+}
+
+// parseDiffFilePaths extracts the current-version file paths from unified diff output
+// by parsing "diff --git a/... b/..." lines and taking the b/ path.
+// Skips /dev/null entries (deleted files).
+func parseDiffFilePaths(diff string) []string {
+	var paths []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(diff, "\n") {
+		if !strings.HasPrefix(line, "diff --git ") {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 4 {
+			continue
+		}
+		bPath := parts[len(parts)-1]
+		if strings.HasPrefix(bPath, "b/") {
+			bPath = bPath[2:]
+		}
+		if bPath == "/dev/null" || bPath == "dev/null" {
+			continue
+		}
+		if !seen[bPath] {
+			seen[bPath] = true
+			paths = append(paths, bPath)
+		}
+	}
+	return paths
+}
+
+// readFileIfExists reads a file at an absolute path, returning "" on error.
+// Caps output at 100 KB and appends a truncation notice for large files.
+func readFileIfExists(path string) string {
+	const maxBytes = 100 * 1024
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	if len(data) > maxBytes {
+		return string(data[:maxBytes]) + "\n[...truncated at 100KB]"
+	}
+	return string(data)
+}
+
+// BuildRichValidatorContext assembles enriched context for reviewer agents:
+// acceptance criteria, diff, full content of changed files, related test files,
+// CLAUDE.md, and go.mod.
+func BuildRichValidatorContext(b *bus.Bus, clusterID, workDir string) (string, error) {
+	var sections []string
+
+	// Acceptance criteria from plan
+	planMsg, err := b.FindLast(clusterID, bus.TopicPlanReady)
+	if err == nil && planMsg != nil {
+		if criteria, ok := planMsg.Data["acceptance_criteria"].(string); ok && criteria != "" {
+			sections = append(sections, "## Acceptance Criteria (from planner)\n\n"+criteria)
+		}
+	}
+
+	// Latest implementation diff
+	diff := ""
+	implMsg, err := b.FindLast(clusterID, bus.TopicImplementationReady)
+	if err == nil && implMsg != nil {
+		diff = implMsg.Content
+		sections = append(sections, "## Implementation\n\n"+diff)
+	}
+
+	// Changed files (full content)
+	changedPaths := parseDiffFilePaths(diff)
+	if len(changedPaths) > 0 {
+		var filesSections []string
+		for _, p := range changedPaths {
+			content := readFileIfExists(filepath.Join(workDir, p))
+			if content == "" {
+				continue
+			}
+			filesSections = append(filesSections, fmt.Sprintf("### %s\n\n```\n%s\n```", p, content))
+		}
+		// Auto-include test files for changed .go files
+		for _, p := range changedPaths {
+			if strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go") {
+				testPath := strings.TrimSuffix(p, ".go") + "_test.go"
+				content := readFileIfExists(filepath.Join(workDir, testPath))
+				if content != "" {
+					filesSections = append(filesSections, fmt.Sprintf("### %s\n\n```\n%s\n```", testPath, content))
+				}
+			}
+		}
+		if len(filesSections) > 0 {
+			sections = append(sections, "## Changed Files (full content)\n\n"+strings.Join(filesSections, "\n\n"))
+		}
+	}
+
+	// Project conventions
+	if content := readFileIfExists(filepath.Join(workDir, "CLAUDE.md")); content != "" {
+		sections = append(sections, "## Project Conventions (CLAUDE.md)\n\n"+content)
+	}
+
+	// Dependency manifest
+	if content := readFileIfExists(filepath.Join(workDir, "go.mod")); content != "" {
+		sections = append(sections, "## Dependency Manifest (go.mod)\n\n"+content)
 	}
 
 	return strings.Join(sections, "\n\n"), nil

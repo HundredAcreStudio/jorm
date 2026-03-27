@@ -211,7 +211,11 @@ func (so *StageOrchestrator) runReviewer(ctx context.Context, stage Stage) (*Age
 		return nil, fmt.Errorf("stage %q has kind=review but no ReviewerConfig", stage.Name)
 	}
 
-	a := NewAgent(*stage.ReviewerConfig, so.bus, so.sink, so.clusterID, so.workDir, so.repoDir, so.env)
+	reviewerCfg := *stage.ReviewerConfig
+	reviewerCfg.ContextBuilder = func(b *bus.Bus, clusterID string) (string, error) {
+		return BuildRichValidatorContext(b, clusterID, so.workDir)
+	}
+	a := NewAgent(reviewerCfg, so.bus, so.sink, so.clusterID, so.workDir, so.repoDir, so.env)
 
 	// Seed from most recent IMPLEMENTATION_READY for diff context
 	if msg, err := so.bus.FindLast(so.clusterID, bus.TopicImplementationReady); err == nil && msg != nil {
