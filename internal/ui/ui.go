@@ -22,8 +22,10 @@ type UI struct {
 	round       int
 	runID       string
 	startTime   time.Time
-	termWidth   int
-	totalAgents int
+	termWidth       int
+	termHeight      int
+	lastFooterLines int
+	totalAgents     int
 	totalCost   float64
 	cancel      context.CancelFunc
 }
@@ -36,21 +38,23 @@ func New(runID string, totalAgents int) *UI {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	footerLines := f.Lines()
 	u := &UI{
-		w:           os.Stdout,
-		formatter:   &Formatter{},
-		footer:      f,
-		metrics:     NewProcessMetrics(),
-		runID:       runID,
-		startTime:   time.Now(),
-		termWidth:   width,
-		totalAgents: totalAgents,
-		cancel:      cancel,
+		w:               os.Stdout,
+		formatter:       &Formatter{},
+		footer:          f,
+		metrics:         NewProcessMetrics(),
+		runID:           runID,
+		startTime:       time.Now(),
+		termWidth:       width,
+		termHeight:      height,
+		lastFooterLines: footerLines,
+		totalAgents:     totalAgents,
+		cancel:          cancel,
 	}
 
-	// Set scroll region once — reserves fixed space at the bottom for the footer.
-	// This never changes during the session.
-	fmt.Fprint(u.w, InitScrollRegion(height))
+	// Set scroll region — reserves space at the bottom for the footer.
+	fmt.Fprint(u.w, InitScrollRegion(height, footerLines))
 	u.paintFooter()
 	u.startFooterLoop(ctx)
 
@@ -71,6 +75,7 @@ func (u *UI) startFooterLoop(ctx context.Context) {
 				u.footer.SetTermSize(w, h)
 				u.mu.Lock()
 				u.termWidth = w
+				u.termHeight = h
 				u.mu.Unlock()
 				u.paintFooter()
 			}
@@ -80,6 +85,15 @@ func (u *UI) startFooterLoop(ctx context.Context) {
 
 // paintFooter writes the footer to the reserved area. Safe to call from any goroutine.
 func (u *UI) paintFooter() {
+	footerLines := u.footer.Lines()
+
+	u.mu.Lock()
+	if footerLines != u.lastFooterLines {
+		fmt.Fprint(u.w, InitScrollRegion(u.termHeight, footerLines))
+		u.lastFooterLines = footerLines
+	}
+	u.mu.Unlock()
+
 	paint := u.footer.Paint()
 	if paint != "" {
 		u.mu.Lock()
@@ -215,7 +229,9 @@ func (u *UI) LoopDone(err error) {
 	}
 
 	u.mu.Lock()
-	fmt.Fprint(u.w, u.footer.Clear())
+	termHeight := u.termHeight
+	footerLines := u.lastFooterLines
+	fmt.Fprint(u.w, u.footer.Clear(termHeight, footerLines))
 	u.mu.Unlock()
 
 	if err != nil {

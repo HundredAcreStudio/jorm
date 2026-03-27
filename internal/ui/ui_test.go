@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -173,9 +174,132 @@ func TestFooterEmpty(t *testing.T) {
 
 func TestFooterClear(t *testing.T) {
 	f := NewFooter("test-run", 0, 72)
-	clear := f.Clear()
+	// AC6: Clear now takes termHeight and footerLines.
+	// AC11: cursor must land at scrollEnd = termHeight - footerLines (row 23 for 24-1).
+	clear := f.Clear(24, 1)
 	if !strings.Contains(clear, "\033[r") {
 		t.Errorf("expected scroll region reset in clear, got %q", clear)
+	}
+	if !strings.Contains(clear, "\033[23;1H") {
+		t.Errorf("expected cursor at row 23 (24-1) in clear, got %q", clear)
+	}
+	// AC13: hard-coded row 999 must be gone.
+	if strings.Contains(clear, "\033[999;1H") {
+		t.Errorf("expected no hard-coded row-999 cursor move in clear, got %q", clear)
+	}
+}
+
+// TestFooterClearCursorPosition verifies Clear positions the cursor at termHeight-footerLines
+// across several input combinations.
+func TestFooterClearCursorPosition(t *testing.T) {
+	tests := []struct {
+		termHeight  int
+		footerLines int
+		wantRow     int
+	}{
+		{24, 1, 23},
+		{24, 3, 21},
+		{40, 5, 35},
+	}
+	f := NewFooter("test-run", 0, 72)
+	for _, tt := range tests {
+		clear := f.Clear(tt.termHeight, tt.footerLines)
+		want := fmt.Sprintf("\033[%d;1H", tt.wantRow)
+		if !strings.Contains(clear, want) {
+			t.Errorf("Clear(%d, %d): want cursor escape %q in %q",
+				tt.termHeight, tt.footerLines, want, clear)
+		}
+	}
+}
+
+// TestInitScrollRegionDynamicFooterLines verifies that InitScrollRegion uses the caller-supplied
+// footerLines to compute the scroll-region end, rather than the fixed maxFooterReserve constant.
+// AC5: function accepts two parameters; AC3/AC11: scroll end = termHeight - footerLines.
+func TestInitScrollRegionDynamicFooterLines(t *testing.T) {
+	tests := []struct {
+		termHeight    int
+		footerLines   int
+		wantScrollEnd int
+	}{
+		{24, 1, 23}, // single status-bar: scroll region ends at row 23
+		{24, 3, 21}, // 3 footer lines: scroll region ends at row 21
+		{40, 5, 35},
+		{24, 8, 16}, // maxFooterReserve-sized footer: same as old constant behavior
+	}
+	for _, tt := range tests {
+		seq := InitScrollRegion(tt.termHeight, tt.footerLines)
+		want := fmt.Sprintf("\033[1;%dr", tt.wantScrollEnd)
+		if !strings.Contains(seq, want) {
+			t.Errorf("InitScrollRegion(%d, %d) = %q, want scroll-region escape %q",
+				tt.termHeight, tt.footerLines, seq, want)
+		}
+	}
+}
+
+// TestPaintReserveMatchesFooterLines verifies that Paint() clears only as many rows as the
+// footer actually occupies (len(lines)), not the old fixed maxFooterReserve rows.
+// AC7: maxFooterReserve must not control the reserved area in Paint().
+func TestPaintReserveMatchesFooterLines(t *testing.T) {
+	f := NewFooter("test-run", 0, 80)
+	f.SetTermSize(80, 24)
+
+	// With no active agents, Lines() == 1 (just the status bar).
+	// Paint() should position into row 24, not into rows 17-23.
+	paint := f.Paint()
+
+	if !strings.Contains(paint, "\033[24;1H") {
+		t.Errorf("Paint() with 1 footer line should clear/write row 24; got %q", paint)
+	}
+
+	// Row 17 = 24 - maxFooterReserve + 1: must not appear when footer is only 1 line.
+	if strings.Contains(paint, "\033[17;1H") {
+		t.Errorf("Paint() with 1 footer line must not clear row 17 (old maxFooterReserve behaviour); got %q", paint)
+	}
+}
+
+// TestUIHasTermHeightAndLastFooterLines verifies that the UI struct exposes the two new fields
+// required by the plan (AC8, AC9). This test will fail to compile until they are added.
+func TestUIHasTermHeightAndLastFooterLines(t *testing.T) {
+	u := &UI{
+		w:               &bytes.Buffer{},
+		formatter:       &Formatter{},
+		footer:          NewFooter("test", 0, 80),
+		metrics:         NewProcessMetrics(),
+		runID:           "test",
+		startTime:       time.Now(),
+		termWidth:       80,
+		termHeight:      24,
+		lastFooterLines: 1,
+	}
+	if u.termHeight != 24 {
+		t.Errorf("expected termHeight 24, got %d", u.termHeight)
+	}
+	if u.lastFooterLines != 1 {
+		t.Errorf("expected lastFooterLines 1, got %d", u.lastFooterLines)
+	}
+}
+
+// TestLoopDoneNoCursorRow999 verifies that LoopDone no longer emits the hard-coded row-999
+// cursor escape. AC10/AC13: Clear must be called with actual height/footerLines.
+func TestLoopDoneNoCursorRow999(t *testing.T) {
+	var buf bytes.Buffer
+	u := &UI{
+		w:               &buf,
+		formatter:       &Formatter{},
+		footer:          NewFooter("test-run", 0, 80),
+		metrics:         NewProcessMetrics(),
+		runID:           "test-run",
+		startTime:       time.Now(),
+		termWidth:       80,
+		termHeight:      24,
+		lastFooterLines: 1,
+		totalAgents:     0,
+	}
+
+	u.LoopDone(nil)
+	output := buf.String()
+	if strings.Contains(output, "\033[999;1H") {
+		t.Errorf("LoopDone must not emit hard-coded row-999 cursor escape; got %q", output)
 	}
 }
 

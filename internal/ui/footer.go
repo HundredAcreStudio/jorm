@@ -124,8 +124,8 @@ func (f *Footer) linesLocked() int {
 
 // InitScrollRegion returns the escape sequence to set a fixed scroll region,
 // reserving maxFooterReserve rows at the bottom. Call once at startup.
-func InitScrollRegion(termHeight int) string {
-	scrollEnd := termHeight - maxFooterReserve
+func InitScrollRegion(termHeight, footerLines int) string {
+	scrollEnd := termHeight - footerLines
 	if scrollEnd < 1 {
 		scrollEnd = 1
 	}
@@ -147,14 +147,11 @@ func (f *Footer) Paint() string {
 	}
 
 	// Footer content is bottom-aligned within the reserved area.
-	reserveStart := height - maxFooterReserve + 1
+	reserveStart := height - len(lines) + 1
 	if reserveStart < 1 {
 		reserveStart = 1
 	}
-	contentStart := height - len(lines) + 1
-	if contentStart < reserveStart {
-		contentStart = reserveStart
-	}
+	contentStart := reserveStart
 
 	var b strings.Builder
 	b.Grow(512)
@@ -291,6 +288,10 @@ func (f *Footer) renderStatusBar(elapsed time.Duration, totalCPU, totalRAM float
 }
 
 // Clear resets the scroll region and clears the footer area.
-func (f *Footer) Clear() string {
-	return "\033[r\033[999;1H\033[J"
+func (f *Footer) Clear(termHeight, footerLines int) string {
+	cursorRow := termHeight - footerLines
+	if cursorRow < 1 {
+		cursorRow = 1
+	}
+	return fmt.Sprintf("\033[r\033[%d;1H\033[J", cursorRow)
 }
