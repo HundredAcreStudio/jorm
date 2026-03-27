@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -108,6 +109,114 @@ func BuildTestWriterContext(b *bus.Bus, clusterID string) (string, error) {
 	if err == nil && planMsg != nil {
 		sections = append(sections, "## Plan\n\n"+planMsg.Content)
 	}
+
+	return strings.Join(sections, "\n\n"), nil
+}
+
+// CollectReviewerNotes queries all approved VALIDATION_RESULT messages and extracts
+// notes containing "LOW:" — from both bare lines and JSON "notes" arrays.
+// Returns a deduplicated slice.
+func CollectReviewerNotes(b *bus.Bus, clusterID string) ([]string, error) {
+	msgs, err := b.Query(clusterID, bus.QueryOpts{
+		Topics: []string{bus.TopicValidationResult},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool)
+	var notes []string
+
+	addNote := func(note, sender string) {
+		note = strings.TrimSpace(note)
+		if note != "" && !seen[note] {
+			seen[note] = true
+			notes = append(notes, fmt.Sprintf("%s  (from %s)", note, sender))
+		}
+	}
+
+	for _, m := range msgs {
+		approved, _ := m.Data["approved"].(bool)
+		if !approved {
+			continue
+		}
+
+		// Strategy 1: Parse JSON "notes" array from the content.
+		// Reviewers output: {"approved": true, "errors": [], "notes": ["LOW: ...", ...]}
+		if idx := strings.Index(m.Content, `"notes"`); idx >= 0 {
+			// Find the array start
+			rest := m.Content[idx:]
+			if arrStart := strings.Index(rest, "["); arrStart >= 0 {
+				arrRest := rest[arrStart:]
+				if arrEnd := strings.Index(arrRest, "]"); arrEnd >= 0 {
+					arrStr := arrRest[:arrEnd+1]
+					var jsonNotes []string
+					if json.Unmarshal([]byte(arrStr), &jsonNotes) == nil {
+						for _, n := range jsonNotes {
+							if strings.Contains(n, "LOW:") {
+								addNote(n, m.Sender)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Strategy 2: Scan bare lines for "LOW:" prefix (fallback for non-JSON output).
+		for _, line := range strings.Split(m.Content, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "LOW:") {
+				addNote(trimmed, m.Sender)
+			}
+		}
+	}
+	return notes, nil
+}
+
+// BuildCleanupWorkerContext assembles context for the cleanup worker:
+// issue + plan + collected LOW notes from all approved reviewers.
+// Returns ("", nil) if no notes exist — caller should skip the stage.
+func BuildCleanupWorkerContext(b *bus.Bus, clusterID string) (string, error) {
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		return "", err
+	}
+	return BuildCleanupWorkerContextFromNotes(b, clusterID, notes)
+}
+
+// BuildCleanupWorkerContextFromNotes assembles cleanup context from pre-collected notes.
+// Avoids re-querying the bus when the caller already has the notes.
+func BuildCleanupWorkerContextFromNotes(b *bus.Bus, clusterID string, notes []string) (string, error) {
+	if len(notes) == 0 {
+		return "", nil
+	}
+
+	var sections []string
+
+	// Issue
+	issueMsgs, err := b.Query(clusterID, bus.QueryOpts{
+		Topics: []string{bus.TopicIssueOpened},
+		Limit:  1,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(issueMsgs) > 0 {
+		sections = append(sections, "## Issue\n\n"+issueMsgs[0].Content)
+	}
+
+	// Plan (if available)
+	planMsg, err := b.FindLast(clusterID, bus.TopicPlanReady)
+	if err == nil && planMsg != nil {
+		sections = append(sections, "## Implementation Plan\n\n"+planMsg.Content)
+	}
+
+	// Cleanup task
+	var noteLines []string
+	for _, n := range notes {
+		noteLines = append(noteLines, "- "+n)
+	}
+	sections = append(sections, "## Cleanup Task: Address Review Notes\n\nThe following low-severity notes were flagged by reviewers. Address each one:\n\n"+strings.Join(noteLines, "\n"))
 
 	return strings.Join(sections, "\n\n"), nil
 }

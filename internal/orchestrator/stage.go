@@ -4,8 +4,9 @@ package orchestrator
 type StageKind string
 
 const (
-	StageKindAgent  StageKind = "agent"  // Run a Claude agent once (planner, test-writer)
-	StageKindReview StageKind = "review" // Reviewer → [Worker → Tester]* loop
+	StageKindAgent   StageKind = "agent"   // Run a Claude agent once (planner, test-writer)
+	StageKindReview  StageKind = "review"  // Reviewer → [Worker → Tester]* loop
+	StageKindCleanup StageKind = "cleanup" // Post-review: collect notes, run worker+tester once
 )
 
 // Stage describes a single unit of work within a StageOrchestrator pipeline.

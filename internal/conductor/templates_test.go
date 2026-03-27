@@ -61,9 +61,9 @@ func TestBuildStagedTemplate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// Builtin full-workflow has Planning + Test Writing + 3 review stages = 5 stages
-		if len(tmpl.Stages) != 5 {
-			t.Errorf("expected 5 builtin stages, got %d", len(tmpl.Stages))
+		// Builtin full-workflow has Planning + Test Writing + 3 review stages + Cleanup = 6 stages
+		if len(tmpl.Stages) != 6 {
+			t.Errorf("expected 6 builtin stages, got %d", len(tmpl.Stages))
 		}
 		if tmpl.TesterConfig.Command == "" {
 			t.Error("expected non-empty tester command from builtin fallback")

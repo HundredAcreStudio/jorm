@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -383,5 +384,135 @@ func TestStageOrchestrator_BusAuditTrail(t *testing.T) {
 				t.Error("expected CLUSTER_COMPLETE with approved=true")
 			}
 		}
+	}
+}
+
+// TestStageOrchestrator_CleanupStage_SkipsWhenNoNotes verifies that a cleanup stage is a
+// no-op when no approved VALIDATION_RESULT messages with LOW: notes exist on the bus.
+// The worker is configured to fail ("false") so if it runs, the test will error.
+func TestStageOrchestrator_CleanupStage_SkipsWhenNoNotes(t *testing.T) {
+	b := newTestBus(t)
+	tmpDir := t.TempDir()
+
+	sentinel := filepath.Join(tmpDir, "worker-ran.txt")
+
+	sink := &fakeSink{}
+	wt := &gitpkg.Worktree{Dir: tmpDir, RepoDir: tmpDir}
+
+	// Worker fails if invoked — proves cleanup stage does not call the worker
+	workerCfg := AgentConfig{
+		ID:            "worker",
+		Name:          "Worker",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       fmt.Sprintf(`touch "%s"; exit 1`, sentinel),
+	}
+	testerCfg := AgentConfig{
+		ID:            "tester",
+		Name:          "Tester",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "true",
+	}
+
+	stages := []Stage{
+		{
+			Name: "Cleanup",
+			Kind: StageKindCleanup,
+		},
+	}
+
+	so := NewStageOrchestrator(b, &config.Config{}, wt, sink, nil,
+		"test-cluster", workerCfg, testerCfg, stages)
+
+	err := so.Run(context.Background(), testIssue())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Worker must NOT have run (no notes exist)
+	if _, statErr := os.Stat(sentinel); statErr == nil {
+		t.Error("expected worker to be skipped when no notes exist, but sentinel file was created")
+	}
+
+	// CLUSTER_COMPLETE must still be published
+	completeMsgs, err := b.Query("test-cluster", bus.QueryOpts{Topics: []string{bus.TopicClusterComplete}})
+	if err != nil {
+		t.Fatalf("querying bus: %v", err)
+	}
+	if len(completeMsgs) == 0 {
+		t.Error("expected CLUSTER_COMPLETE after cleanup stage with no notes")
+	}
+}
+
+// TestStageOrchestrator_CleanupStage_RunsWorkerWhenNotesExist verifies that when an
+// approved VALIDATION_RESULT with LOW: notes is on the bus, the cleanup stage invokes
+// the worker and then the tester, and CLUSTER_COMPLETE is published on success.
+func TestStageOrchestrator_CleanupStage_RunsWorkerWhenNotesExist(t *testing.T) {
+	b := newTestBus(t)
+	tmpDir := t.TempDir()
+
+	workerSentinel := filepath.Join(tmpDir, "worker-ran.txt")
+	testerSentinel := filepath.Join(tmpDir, "tester-ran.txt")
+
+	// Seed bus with an approved VALIDATION_RESULT containing a LOW: note
+	b.Publish(bus.Message{
+		ClusterID: "test-cluster",
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: example note that should trigger cleanup",
+		Data:      map[string]any{"approved": true},
+	})
+
+	sink := &fakeSink{}
+	wt := &gitpkg.Worktree{Dir: tmpDir, RepoDir: tmpDir}
+
+	workerCfg := AgentConfig{
+		ID:            "worker",
+		Name:          "Worker",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       fmt.Sprintf(`touch "%s"`, workerSentinel),
+	}
+	testerCfg := AgentConfig{
+		ID:            "tester",
+		Name:          "Tester",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       fmt.Sprintf(`touch "%s"`, testerSentinel),
+	}
+
+	stages := []Stage{
+		{
+			Name: "Cleanup",
+			Kind: StageKindCleanup,
+		},
+	}
+
+	so := NewStageOrchestrator(b, &config.Config{}, wt, sink, nil,
+		"test-cluster", workerCfg, testerCfg, stages)
+
+	err := so.Run(context.Background(), testIssue())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Worker must have run
+	if _, statErr := os.Stat(workerSentinel); os.IsNotExist(statErr) {
+		t.Error("expected worker to be invoked when notes exist, but sentinel file not found")
+	}
+
+	// Tester must have run
+	if _, statErr := os.Stat(testerSentinel); os.IsNotExist(statErr) {
+		t.Error("expected tester to be invoked after worker cleanup, but sentinel file not found")
+	}
+
+	// CLUSTER_COMPLETE must be published
+	completeMsgs, err := b.Query("test-cluster", bus.QueryOpts{Topics: []string{bus.TopicClusterComplete}})
+	if err != nil {
+		t.Fatalf("querying bus: %v", err)
+	}
+	if len(completeMsgs) == 0 {
+		t.Error("expected CLUSTER_COMPLETE after cleanup stage with notes")
 	}
 }

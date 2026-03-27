@@ -301,6 +301,317 @@ func TestBuildStageScopedWorkerContext_ExcludesApproved(t *testing.T) {
 	}
 }
 
+// --- CollectReviewerNotes tests ---
+
+// TestCollectReviewerNotes_NoApprovedMessages verifies that an empty bus returns an empty slice.
+func TestCollectReviewerNotes_NoApprovedMessages(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) != 0 {
+		t.Errorf("expected empty notes slice, got %v", notes)
+	}
+}
+
+// TestCollectReviewerNotes_ApprovedWithNotes verifies that LOW: lines are extracted from
+// approved VALIDATION_RESULT messages.
+func TestCollectReviewerNotes_ApprovedWithNotes(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: json.Unmarshal error silently discarded\nLOW: Consider adding a timeout",
+		Data:      map[string]any{"approved": true},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) == 0 {
+		t.Fatal("expected notes to be extracted from approved VALIDATION_RESULT")
+	}
+
+	var foundUnmarshal, foundTimeout bool
+	for _, n := range notes {
+		if contains(n, "json.Unmarshal error silently discarded") {
+			foundUnmarshal = true
+		}
+		if contains(n, "Consider adding a timeout") {
+			foundTimeout = true
+		}
+	}
+	if !foundUnmarshal {
+		t.Error("expected note about json.Unmarshal to be extracted")
+	}
+	if !foundTimeout {
+		t.Error("expected note about timeout to be extracted")
+	}
+}
+
+// TestCollectReviewerNotes_JSONEmbeddedNotes verifies that LOW: notes inside a JSON
+// "notes" array are extracted — this is the actual format reviewers produce.
+func TestCollectReviewerNotes_JSONEmbeddedNotes(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	// This is the actual format from pr-review.md output
+	content := `I've reviewed the diff.
+
+` + "```json\n" + `{
+  "approved": true,
+  "errors": [],
+  "notes": [
+    "LOW: db.go:108 — json.Unmarshal error is silently discarded",
+    "LOW: tools.go:43 — var out stays nil producing null instead of empty array"
+  ]
+}
+` + "```\n\nVERDICT: ACCEPT"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   content,
+		Data:      map[string]any{"approved": true},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) == 0 {
+		t.Fatal("expected notes from JSON-embedded format")
+	}
+
+	var foundUnmarshal, foundNull bool
+	for _, n := range notes {
+		if contains(n, "json.Unmarshal error") {
+			foundUnmarshal = true
+		}
+		if contains(n, "null instead of empty array") {
+			foundNull = true
+		}
+	}
+	if !foundUnmarshal {
+		t.Errorf("expected json.Unmarshal note, got: %v", notes)
+	}
+	if !foundNull {
+		t.Errorf("expected null/empty array note, got: %v", notes)
+	}
+}
+
+// TestCollectReviewerNotes_RejectedMessagesIgnored verifies that LOW: lines from rejected
+// VALIDATION_RESULT messages are not collected.
+func TestCollectReviewerNotes_RejectedMessagesIgnored(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: REJECT\nLOW: This is from a rejection and should be ignored",
+		Data:      map[string]any{"approved": false},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(notes) != 0 {
+		t.Errorf("expected no notes from rejected validation results, got %v", notes)
+	}
+}
+
+// TestCollectReviewerNotes_MixedApprovalStatuses verifies that only notes from approved
+// messages are collected when both approved and rejected messages exist.
+func TestCollectReviewerNotes_MixedApprovalStatuses(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: approved-note",
+		Data:      map[string]any{"approved": true},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "security-reviewer",
+		Content:   "VERDICT: REJECT\nLOW: rejected-note",
+		Data:      map[string]any{"approved": false},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, n := range notes {
+		if contains(n, "rejected-note") {
+			t.Error("expected rejected-note to be excluded from collected notes")
+		}
+	}
+
+	var foundApproved bool
+	for _, n := range notes {
+		if contains(n, "approved-note") {
+			foundApproved = true
+		}
+	}
+	if !foundApproved {
+		t.Error("expected approved-note to be included in collected notes")
+	}
+}
+
+// TestCollectReviewerNotes_DeduplicatesNotes verifies that duplicate LOW: lines across
+// multiple approved messages appear only once in the result.
+func TestCollectReviewerNotes_DeduplicatesNotes(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: duplicate note",
+		Data:      map[string]any{"approved": true},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "security-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: duplicate note",
+		Data:      map[string]any{"approved": true},
+	})
+
+	notes, err := CollectReviewerNotes(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	count := 0
+	for _, n := range notes {
+		if contains(n, "duplicate note") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected duplicate note to appear exactly once, got %d occurrences", count)
+	}
+}
+
+// --- BuildCleanupWorkerContext tests ---
+
+// TestBuildCleanupWorkerContext_NoNotes verifies that an empty string is returned when
+// no approved VALIDATION_RESULT messages exist.
+func TestBuildCleanupWorkerContext_NoNotes(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	result, err := BuildCleanupWorkerContext(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("expected empty string when no notes exist, got %q", result)
+	}
+}
+
+// TestBuildCleanupWorkerContext_WithNotes verifies that the prompt contains all collected
+// notes and the cleanup task header.
+func TestBuildCleanupWorkerContext_WithNotes(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: json.Unmarshal error silently discarded",
+		Data:      map[string]any{"approved": true},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "security-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: Consider rate limiting",
+		Data:      map[string]any{"approved": true},
+	})
+
+	result, err := BuildCleanupWorkerContext(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == "" {
+		t.Fatal("expected non-empty cleanup context when notes exist")
+	}
+
+	if !contains(result, "Cleanup") {
+		t.Error("expected cleanup task header in context")
+	}
+	if !contains(result, "json.Unmarshal error silently discarded") {
+		t.Error("expected first note in cleanup context")
+	}
+	if !contains(result, "Consider rate limiting") {
+		t.Error("expected second note in cleanup context")
+	}
+}
+
+// TestBuildCleanupWorkerContext_IncludesIssueAndPlan verifies that the cleanup context
+// includes issue and plan sections alongside the notes.
+func TestBuildCleanupWorkerContext_IncludesIssueAndPlan(t *testing.T) {
+	b := newTestBus(t)
+	clusterID := "test-cluster"
+
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicIssueOpened,
+		Sender:    "provider",
+		Content:   "Fix the login bug",
+		Data:      map[string]any{},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicPlanReady,
+		Sender:    "planner",
+		Content:   "Step 1: do this",
+		Data:      map[string]any{},
+	})
+	b.Publish(bus.Message{
+		ClusterID: clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "pr-reviewer",
+		Content:   "VERDICT: ACCEPT\nLOW: Add missing error check",
+		Data:      map[string]any{"approved": true},
+	})
+
+	result, err := BuildCleanupWorkerContext(b, clusterID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !contains(result, "Fix the login bug") {
+		t.Error("expected issue content in cleanup context")
+	}
+	if !contains(result, "Step 1: do this") {
+		t.Error("expected plan content in cleanup context")
+	}
+	if !contains(result, "Add missing error check") {
+		t.Error("expected note in cleanup context")
+	}
+}
+
 func TestBuildStageScopedWorkerContext_Float64StageIndex(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"

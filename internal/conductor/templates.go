@@ -240,6 +240,9 @@ func BuildStagedTemplate(cfg *config.Config, profile string) (StagedTemplate, er
 		}
 	}
 
+	// Append cleanup stage to address any LOW-severity reviewer notes
+	stages = append(stages, orchestrator.Stage{Name: "Cleanup", Kind: orchestrator.StageKindCleanup})
+
 	return StagedTemplate{
 		WorkerConfig: workerAgent(model, 5),
 		TesterConfig: testerCfg,
@@ -262,6 +265,7 @@ func BuiltinStagedTemplates(model string) map[string]StagedTemplate {
 				{Name: "Test Review", Kind: orchestrator.StageKindReview, ReviewerConfig: ptr(testReviewAgent()), MaxRetries: 3},
 				{Name: "PR Review", Kind: orchestrator.StageKindReview, ReviewerConfig: ptr(prReviewAgent()), MaxRetries: 3},
 				{Name: "Security Review", Kind: orchestrator.StageKindReview, ReviewerConfig: ptr(securityReviewAgent()), MaxRetries: 3},
+				{Name: "Cleanup", Kind: orchestrator.StageKindCleanup},
 			},
 		},
 	}

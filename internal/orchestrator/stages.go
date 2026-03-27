@@ -78,6 +78,8 @@ func (so *StageOrchestrator) Run(ctx context.Context, iss *issue.Issue) error {
 			err = so.runAgentStage(ctx, stage)
 		case StageKindReview:
 			err = so.runReviewStage(ctx, i, stage)
+		case StageKindCleanup:
+			err = so.runCleanupStage(ctx, stage)
 		default:
 			err = fmt.Errorf("unknown stage kind %q", stage.Kind)
 		}
@@ -259,6 +261,60 @@ func (so *StageOrchestrator) runTester(ctx context.Context) (*AgentResult, error
 	so.sink.MessagePublished(bus.TopicTestsReady, "stage_orchestrator")
 
 	return result, nil
+}
+
+// runCleanupStage collects LOW-severity notes from approved reviews and runs the worker
+// once to address them, followed by the tester. Skips if no notes exist.
+func (so *StageOrchestrator) runCleanupStage(ctx context.Context, stage Stage) error {
+	notes, err := CollectReviewerNotes(so.bus, so.clusterID)
+	if err != nil {
+		return fmt.Errorf("collecting reviewer notes: %w", err)
+	}
+	if len(notes) == 0 {
+		return nil
+	}
+
+	// Build a cleanup worker config with the collected notes (avoids re-querying)
+	workerCfg := so.workerConfig
+	workerCfg.ContextBuilder = func(b *bus.Bus, clusterID string) (string, error) {
+		return BuildCleanupWorkerContextFromNotes(b, clusterID, notes)
+	}
+	a := NewAgent(workerCfg, so.bus, so.sink, so.clusterID, so.workDir, so.repoDir, so.env)
+
+	if msg, err := so.bus.FindLast(so.clusterID, bus.TopicValidationResult); err == nil && msg != nil {
+		a.lastTrigger = *msg
+	}
+
+	if _, err := a.ExecuteOnce(ctx); err != nil {
+		return fmt.Errorf("cleanup worker: %w", err)
+	}
+
+	// Run tester to verify cleanup didn't break anything
+	testerResult, err := so.runTester(ctx)
+	if err != nil {
+		return fmt.Errorf("cleanup tester: %w", err)
+	}
+
+	if !testerResult.Approved {
+		if err := so.runWorkerTestFix(ctx, testerResult); err != nil {
+			return fmt.Errorf("cleanup worker test fix: %w", err)
+		}
+	}
+
+	// Publish audit message
+	so.bus.Publish(bus.Message{
+		ClusterID: so.clusterID,
+		Topic:     bus.TopicValidationResult,
+		Sender:    "cleanup",
+		Content:   fmt.Sprintf("Addressed %d reviewer notes", len(notes)),
+		Data: map[string]any{
+			"approved":    true,
+			"notes_count": len(notes),
+		},
+	})
+	so.sink.MessagePublished(bus.TopicValidationResult, "cleanup")
+
+	return nil
 }
 
 // runWorkerTestFix runs the worker agent to fix failing tests.
