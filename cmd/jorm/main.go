@@ -20,6 +20,7 @@ import (
 	"github.com/jorm/internal/conductor"
 	"github.com/jorm/internal/events"
 	"github.com/jorm/internal/loop"
+	"github.com/jorm/internal/mcp"
 	"github.com/jorm/internal/store"
 	"github.com/jorm/internal/ui"
 )
@@ -454,7 +455,7 @@ func main() {
 		},
 	}
 
-	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd, versionCmd, newDemoCmd())
+	root.AddCommand(runCmd, resumeCmd, listCmd, statusCmd, logsCmd, stopCmd, cleanCmd, inspectCmd, configCmd, initCmd, versionCmd, newDemoCmd(), newMCPCmd())
 
 	if err := root.Execute(); err != nil {
 		os.Exit(1)
@@ -499,6 +500,35 @@ func cleanRun(st *store.Store, r *store.RunState) error {
 		return fmt.Errorf("deleting run %s: %w", r.ID, err)
 	}
 	return nil
+}
+
+func newMCPCmd() *cobra.Command {
+	var (
+		dbFlag   string
+		logsFlag string
+	)
+	cmd := &cobra.Command{
+		Use:   "mcp",
+		Short: "Start the MCP server on stdio for run monitoring and log analysis",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if dbFlag == "" || logsFlag == "" {
+				home, err := os.UserHomeDir()
+				if err != nil {
+					return err
+				}
+				if dbFlag == "" {
+					dbFlag = filepath.Join(home, ".jorm", "jorm.db")
+				}
+				if logsFlag == "" {
+					logsFlag = filepath.Join(home, ".jorm", "logs")
+				}
+			}
+			return mcp.NewServer(dbFlag, logsFlag).Run()
+		},
+	}
+	cmd.Flags().StringVar(&dbFlag, "db", "", "path to jorm SQLite database (default ~/.jorm/jorm.db)")
+	cmd.Flags().StringVar(&logsFlag, "logs", "", "path to log directory (default ~/.jorm/logs)")
+	return cmd
 }
 
 func availableWorkflows(templates map[string]conductor.StagedTemplate) string {
