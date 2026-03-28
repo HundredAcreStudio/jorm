@@ -68,7 +68,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	defer st.Close()
+	defer st.Close() //nolint:errcheck
 
 	// Generate sequential run ID
 	runCount, err := st.CountRunsForIssue(opts.IssueID)
@@ -87,7 +87,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		sink.Phase(fmt.Sprintf("Warning: could not create logger: %s", err))
 	} else {
-		defer logger.Close()
+		defer logger.Close() //nolint:errcheck
 		slog.SetDefault(logger.SlogLogger())
 		logger.Info("starting run", "issue_id", opts.IssueID, "worktree", opts.Worktree, "pr", opts.PR, "ship", opts.Ship)
 		sink = jormlog.NewLogSink(sink, logger)
@@ -145,7 +145,7 @@ func Run(ctx context.Context, opts Options) error {
 		hasChanges, _ := wt.HasChanges()
 		if !hasChanges {
 			sink.Phase("Cleaning up worktree (no changes)...")
-			wt.Cleanup()
+			_ = wt.Cleanup()
 		} else {
 			sink.Phase(fmt.Sprintf("Worktree kept at %s", wt.Dir))
 		}
@@ -213,7 +213,7 @@ func runConductorMode(ctx context.Context, cfg *config.Config, st *store.Store, 
 			return fmt.Errorf("saving run state: %w (original: %w)", saveErr, runErr)
 		}
 		hookRunner := hooks.NewRunner(cfg.Hooks, wt.Dir, sink, subEnv)
-		hookRunner.OnFailure(ctx)
+		_ = hookRunner.OnFailure(ctx)
 		return runErr
 	}
 

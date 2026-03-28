@@ -84,9 +84,7 @@ func parseDiffFilePaths(diff string) []string {
 			continue
 		}
 		bPath := parts[len(parts)-1]
-		if strings.HasPrefix(bPath, "b/") {
-			bPath = bPath[2:]
-		}
+		bPath = strings.TrimPrefix(bPath, "b/")
 		if bPath == "/dev/null" || bPath == "dev/null" {
 			continue
 		}

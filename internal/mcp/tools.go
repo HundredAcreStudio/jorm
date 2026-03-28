@@ -131,7 +131,7 @@ func getLogs(logDir, runID string, since time.Time, limit int) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("opening log file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var lines []string
 	scanner := bufio.NewScanner(f)

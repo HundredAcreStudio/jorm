@@ -80,7 +80,7 @@ func linearGraphQL[T any](ctx context.Context, client *http.Client, apiKey, quer
 	if err != nil {
 		return nil, fmt.Errorf("executing request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("linear API returned status %d", resp.StatusCode)

@@ -137,7 +137,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 
 			runs, err := st.List()
 			if err != nil {
@@ -150,7 +150,7 @@ func main() {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tISSUE\tBRANCH\tSTATUS\tATTEMPTS\tUPDATED")
+			_, _ = fmt.Fprintln(w, "ID\tISSUE\tBRANCH\tSTATUS\tATTEMPTS\tUPDATED")
 			for _, r := range runs {
 				status := r.Status
 				switch status {
@@ -161,7 +161,7 @@ func main() {
 				case "running":
 					status = color.YellowString(status)
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
 					r.ID, r.IssueID, r.Branch, status, r.Attempt, r.UpdatedAt.Format("2006-01-02 15:04"))
 			}
 			return w.Flush()
@@ -178,7 +178,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 
 			if len(args) == 1 {
 				run, err := st.Load(args[0])
@@ -186,16 +186,16 @@ func main() {
 					return fmt.Errorf("loading run: %w", err)
 				}
 				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintf(w, "ID:\t%s\n", run.ID)
-				fmt.Fprintf(w, "Issue:\t%s\n", run.IssueID)
-				fmt.Fprintf(w, "Branch:\t%s\n", run.Branch)
-				fmt.Fprintf(w, "Status:\t%s\n", run.Status)
-				fmt.Fprintf(w, "Attempts:\t%d\n", run.Attempt)
-				fmt.Fprintf(w, "Worktree:\t%s\n", run.WorktreeDir)
-				fmt.Fprintf(w, "Created:\t%s\n", run.CreatedAt.Format(time.RFC3339))
-				fmt.Fprintf(w, "Updated:\t%s\n", run.UpdatedAt.Format(time.RFC3339))
+				_, _ = fmt.Fprintf(w, "ID:\t%s\n", run.ID)
+				_, _ = fmt.Fprintf(w, "Issue:\t%s\n", run.IssueID)
+				_, _ = fmt.Fprintf(w, "Branch:\t%s\n", run.Branch)
+				_, _ = fmt.Fprintf(w, "Status:\t%s\n", run.Status)
+				_, _ = fmt.Fprintf(w, "Attempts:\t%d\n", run.Attempt)
+				_, _ = fmt.Fprintf(w, "Worktree:\t%s\n", run.WorktreeDir)
+				_, _ = fmt.Fprintf(w, "Created:\t%s\n", run.CreatedAt.Format(time.RFC3339))
+				_, _ = fmt.Fprintf(w, "Updated:\t%s\n", run.UpdatedAt.Format(time.RFC3339))
 				if run.Findings != "" {
-					fmt.Fprintf(w, "Findings:\t%s\n", run.Findings)
+					_, _ = fmt.Fprintf(w, "Findings:\t%s\n", run.Findings)
 				}
 				return w.Flush()
 			}
@@ -210,9 +210,9 @@ func main() {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tISSUE\tSTATUS\tATTEMPTS\tUPDATED")
+			_, _ = fmt.Fprintln(w, "ID\tISSUE\tSTATUS\tATTEMPTS\tUPDATED")
 			for _, r := range runs {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n",
 					r.ID, r.IssueID, r.Status, r.Attempt, r.UpdatedAt.Format("2006-01-02 15:04"))
 			}
 			return w.Flush()
@@ -279,7 +279,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			defer func() { _ = st.Close() }()
 
 			if cleanAll {
 				runs, err := st.List()
@@ -327,7 +327,7 @@ func main() {
 			if err != nil {
 				return err
 			}
-			defer st.Close()
+			defer st.Close() //nolint:errcheck
 
 			msgs, err := st.QueryMessages(args[0], "")
 			if err != nil {
@@ -506,7 +506,7 @@ func cleanRun(st *store.Store, r *store.RunState) error {
 		if out, err := cmd.Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
 			fmt.Fprintf(os.Stderr, "Warning: worktree %s has uncommitted changes, removing anyway\n", r.WorktreeDir)
 		}
-		os.RemoveAll(r.WorktreeDir)
+		_ = os.RemoveAll(r.WorktreeDir)
 	}
 	if err := st.Delete(r.ID); err != nil {
 		return fmt.Errorf("deleting run %s: %w", r.ID, err)

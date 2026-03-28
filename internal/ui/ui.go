@@ -54,7 +54,7 @@ func New(runID string, totalAgents int) *UI {
 	}
 
 	// Set scroll region — reserves space at the bottom for the footer.
-	fmt.Fprint(u.w, InitScrollRegion(height, footerLines))
+	_, _ = fmt.Fprint(u.w, InitScrollRegion(height, footerLines))
 	u.paintFooter()
 	u.startFooterLoop(ctx)
 
@@ -89,7 +89,7 @@ func (u *UI) paintFooter() {
 
 	u.mu.Lock()
 	if footerLines != u.lastFooterLines {
-		fmt.Fprint(u.w, InitScrollRegion(u.termHeight, footerLines))
+		_, _ = fmt.Fprint(u.w, InitScrollRegion(u.termHeight, footerLines))
 		u.lastFooterLines = footerLines
 	}
 	u.mu.Unlock()
@@ -97,7 +97,7 @@ func (u *UI) paintFooter() {
 	paint := u.footer.Paint()
 	if paint != "" {
 		u.mu.Lock()
-		fmt.Fprint(u.w, paint)
+		_, _ = fmt.Fprint(u.w, paint)
 		u.mu.Unlock()
 	}
 }
@@ -110,7 +110,7 @@ func (u *UI) Metrics() *ProcessMetrics {
 func (u *UI) printLine(line string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	fmt.Fprintln(u.w, line)
+	_, _ = fmt.Fprintln(u.w, line)
 }
 
 func (u *UI) printAgentLine(name, text string) {
@@ -231,7 +231,7 @@ func (u *UI) LoopDone(err error) {
 	u.mu.Lock()
 	termHeight := u.termHeight
 	footerLines := u.lastFooterLines
-	fmt.Fprint(u.w, u.footer.Clear(termHeight, footerLines))
+	_, _ = fmt.Fprint(u.w, u.footer.Clear(termHeight, footerLines))
 	u.mu.Unlock()
 
 	if err != nil {

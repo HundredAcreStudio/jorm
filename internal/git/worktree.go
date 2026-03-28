@@ -22,11 +22,11 @@ func CreateWorktree(repoDir, issueID string) (*Worktree, error) {
 	dir := filepath.Join(os.TempDir(), fmt.Sprintf("jorm-%s", issueID))
 
 	// Clean up stale worktree/branch from previous runs
-	exec.Command("git", "worktree", "remove", dir, "--force").Run()
-	exec.Command("git", "branch", "-D", branch).Run()
+	_ = exec.Command("git", "worktree", "remove", dir, "--force").Run()
+	_ = exec.Command("git", "branch", "-D", branch).Run()
 
 	// Remove leftover temp dir if it exists
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 
 	cmd := exec.Command("git", "worktree", "add", "-b", branch, dir)
 	cmd.Dir = repoDir

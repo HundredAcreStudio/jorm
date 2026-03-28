@@ -259,7 +259,7 @@ func (a *Agent) PublishOnComplete(result *AgentResult) {
 		data[k] = v
 	}
 	for _, action := range a.Config.OnComplete {
-		a.bus.Publish(bus.Message{
+		_ = a.bus.Publish(bus.Message{
 			ClusterID: a.clusterID,
 			Topic:     action.Topic,
 			Sender:    a.Config.ID,

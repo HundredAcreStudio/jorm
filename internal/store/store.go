@@ -48,13 +48,13 @@ func New() (*Store, error) {
 
 	// Enable WAL mode for concurrent reads from multiple agent goroutines
 	if _, err := db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("enabling WAL mode: %w", err)
 	}
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
@@ -96,10 +96,10 @@ func (s *Store) migrate() error {
 	}
 
 	// Index for efficient queries by cluster + topic
-	s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_cluster_topic ON messages(cluster_id, topic, timestamp)`)
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_messages_cluster_topic ON messages(cluster_id, topic, timestamp)`)
 
 	// Add in_place column for existing databases
-	s.db.Exec(`ALTER TABLE runs ADD COLUMN in_place INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.Exec(`ALTER TABLE runs ADD COLUMN in_place INTEGER NOT NULL DEFAULT 0`)
 
 	return nil
 }
@@ -168,7 +168,7 @@ func (s *Store) List() ([]*RunState, error) {
 	if err != nil {
 		return nil, fmt.Errorf("listing runs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var runs []*RunState
 	for rows.Next() {
@@ -191,11 +191,11 @@ func (s *Store) Delete(id string) error {
 	}
 
 	if _, err := tx.Exec(`DELETE FROM runs WHERE id = ?`, id); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("deleting run %s: %w", id, err)
 	}
 	if _, err := tx.Exec(`DELETE FROM messages WHERE cluster_id = ?`, id); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return fmt.Errorf("deleting messages for run %s: %w", id, err)
 	}
 
@@ -228,7 +228,7 @@ func (s *Store) QueryMessages(clusterID string, topic string) ([]Message, error)
 	if err != nil {
 		return nil, fmt.Errorf("querying messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var msgs []Message
 	for rows.Next() {

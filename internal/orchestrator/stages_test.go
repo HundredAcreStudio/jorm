@@ -455,7 +455,7 @@ func TestStageOrchestrator_CleanupStage_RunsWorkerWhenNitNotesExist(t *testing.T
 	workerSentinel := filepath.Join(tmpDir, "worker-ran-nit.txt")
 
 	// Seed bus with an approved VALIDATION_RESULT containing a Nit: note (new format)
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: "test-cluster",
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -522,7 +522,7 @@ func TestStageOrchestrator_CleanupStage_RunsWorkerWhenNotesExist(t *testing.T) {
 	testerSentinel := filepath.Join(tmpDir, "tester-ran.txt")
 
 	// Seed bus with an approved VALIDATION_RESULT containing a LOW: note
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: "test-cluster",
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",

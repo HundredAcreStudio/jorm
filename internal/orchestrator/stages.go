@@ -51,7 +51,7 @@ func NewStageOrchestrator(
 // Run drives stages sequentially, publishing bus events for the audit trail.
 func (so *StageOrchestrator) Run(ctx context.Context, iss *issue.Issue) error {
 	// 1. Publish ISSUE_OPENED to seed the bus
-	so.bus.Publish(bus.Message{
+	_ = so.bus.Publish(bus.Message{
 		ClusterID: so.clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "stage_orchestrator",
@@ -91,7 +91,7 @@ func (so *StageOrchestrator) Run(ctx context.Context, iss *issue.Issue) error {
 	}
 
 	// 3. Publish CLUSTER_COMPLETE
-	so.bus.Publish(bus.Message{
+	_ = so.bus.Publish(bus.Message{
 		ClusterID: so.clusterID,
 		Topic:     bus.TopicClusterComplete,
 		Sender:    "stage_orchestrator",
@@ -142,7 +142,7 @@ func (so *StageOrchestrator) runReviewStage(ctx context.Context, stageIdx int, s
 		}
 
 		// 2. Publish VALIDATION_RESULT
-		so.bus.Publish(bus.Message{
+		_ = so.bus.Publish(bus.Message{
 			ClusterID: so.clusterID,
 			Topic:     bus.TopicValidationResult,
 			Sender:    stage.ReviewerConfig.ID,
@@ -189,7 +189,7 @@ func (so *StageOrchestrator) runReviewStage(ctx context.Context, stageIdx int, s
 		if d, err := so.worktree.Diff(); err == nil {
 			diff = d
 		}
-		so.bus.Publish(bus.Message{
+		_ = so.bus.Publish(bus.Message{
 			ClusterID: so.clusterID,
 			Topic:     bus.TopicImplementationReady,
 			Sender:    "stage_orchestrator",
@@ -253,7 +253,7 @@ func (so *StageOrchestrator) runTester(ctx context.Context) (*AgentResult, error
 	}
 
 	// Publish TESTS_READY for audit trail
-	so.bus.Publish(bus.Message{
+	_ = so.bus.Publish(bus.Message{
 		ClusterID: so.clusterID,
 		Topic:     bus.TopicTestsReady,
 		Sender:    "stage_orchestrator",
@@ -306,7 +306,7 @@ func (so *StageOrchestrator) runCleanupStage(ctx context.Context, stage Stage) e
 	}
 
 	// Publish audit message
-	so.bus.Publish(bus.Message{
+	_ = so.bus.Publish(bus.Message{
 		ClusterID: so.clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "cleanup",

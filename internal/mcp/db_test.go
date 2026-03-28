@@ -18,7 +18,7 @@ func newTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS runs (

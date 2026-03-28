@@ -16,7 +16,7 @@ func TestBuildValidatorContext_IncludesAcceptanceCriteria(t *testing.T) {
 	clusterID := "test-cluster"
 
 	criteria := "AC1: Build passes\nAC2: Tests pass\nAC3: No lint errors"
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicPlanReady,
 		Sender:    "planner",
@@ -61,7 +61,7 @@ func TestBuildValidatorContext_PlanWithoutCriteria(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicPlanReady,
 		Sender:    "planner",
@@ -84,7 +84,7 @@ func TestBuildValidatorContext_IncludesDiff(t *testing.T) {
 	clusterID := "test-cluster"
 
 	diffContent := "diff --git a/main.go b/main.go\n+added line"
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -110,14 +110,14 @@ func TestBuildValidatorContext_CriteriaAndDiff(t *testing.T) {
 	clusterID := "test-cluster"
 
 	criteria := "AC1: Must compile"
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicPlanReady,
 		Sender:    "planner",
 		Content:   "plan",
 		Data:      map[string]any{"acceptance_criteria": criteria},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -148,14 +148,14 @@ func TestBuildTestWriterContext_IssueAndPlan(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "provider",
 		Content:   "Fix the login bug",
 		Data:      map[string]any{},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicPlanReady,
 		Sender:    "planner",
@@ -186,7 +186,7 @@ func TestBuildTestWriterContext_NoPlan(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "provider",
@@ -211,7 +211,7 @@ func TestBuildStageScopedWorkerContext_FiltersOtherStages(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "provider",
@@ -220,7 +220,7 @@ func TestBuildStageScopedWorkerContext_FiltersOtherStages(t *testing.T) {
 	})
 
 	// Rejection from stage 0 (should be excluded when querying stage 1)
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "stage0-reviewer",
@@ -229,7 +229,7 @@ func TestBuildStageScopedWorkerContext_FiltersOtherStages(t *testing.T) {
 	})
 
 	// Rejection from stage 1 (should be included)
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "stage1-reviewer",
@@ -254,7 +254,7 @@ func TestBuildStageScopedWorkerContext_NoRejections(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "provider",
@@ -279,14 +279,14 @@ func TestBuildStageScopedWorkerContext_ExcludesApproved(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "provider",
 		Content:   "Issue",
 		Data:      map[string]any{},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "reviewer",
@@ -326,7 +326,7 @@ func TestCollectReviewerNotes_ApprovedWithNotes(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -378,7 +378,7 @@ func TestCollectReviewerNotes_JSONEmbeddedNotes(t *testing.T) {
 }
 ` + "```\n\nVERDICT: ACCEPT"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -417,7 +417,7 @@ func TestCollectReviewerNotes_RejectedMessagesIgnored(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -440,14 +440,14 @@ func TestCollectReviewerNotes_MixedApprovalStatuses(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
 		Content:   "VERDICT: ACCEPT\nLOW: approved-note",
 		Data:      map[string]any{"approved": true},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "security-reviewer",
@@ -483,7 +483,7 @@ func TestCollectReviewerNotes_NitPrefixCollected(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -534,7 +534,7 @@ func TestCollectReviewerNotes_JSONEmbeddedNitNotes(t *testing.T) {
 }
 ` + "```\n\nVERDICT: ACCEPT"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -573,7 +573,7 @@ func TestCollectReviewerNotes_LowPrefixBackwardCompat(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -603,7 +603,7 @@ func TestCollectReviewerNotes_MixedNitAndLow(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -639,14 +639,14 @@ func TestCollectReviewerNotes_DeduplicatesNotes(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
 		Content:   "VERDICT: ACCEPT\nLOW: duplicate note",
 		Data:      map[string]any{"approved": true},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "security-reviewer",
@@ -693,14 +693,14 @@ func TestBuildCleanupWorkerContext_WithNotes(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
 		Content:   "VERDICT: ACCEPT\nLOW: json.Unmarshal error silently discarded",
 		Data:      map[string]any{"approved": true},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "security-reviewer",
@@ -733,21 +733,21 @@ func TestBuildCleanupWorkerContext_IncludesIssueAndPlan(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "provider",
 		Content:   "Fix the login bug",
 		Data:      map[string]any{},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicPlanReady,
 		Sender:    "planner",
 		Content:   "Step 1: do this",
 		Data:      map[string]any{},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "pr-reviewer",
@@ -775,14 +775,14 @@ func TestBuildStageScopedWorkerContext_Float64StageIndex(t *testing.T) {
 	b := newTestBus(t)
 	clusterID := "test-cluster"
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicIssueOpened,
 		Sender:    "provider",
 		Content:   "Issue",
 		Data:      map[string]any{},
 	})
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicValidationResult,
 		Sender:    "reviewer",
@@ -814,7 +814,7 @@ func TestBuildRichValidatorContext_IncludesChangedFileContent(t *testing.T) {
 	}
 
 	diff := "diff --git a/hello.go b/hello.go\n--- a/hello.go\n+++ b/hello.go\n@@ -1 +1 @@\n+package main\n"
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -847,7 +847,7 @@ func TestBuildRichValidatorContext_IncludesCLAUDEMD(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -880,7 +880,7 @@ func TestBuildRichValidatorContext_IncludesGoMod(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -918,7 +918,7 @@ func TestBuildRichValidatorContext_IncludesTestFile(t *testing.T) {
 	}
 
 	diff := "diff --git a/foo.go b/foo.go\n--- a/foo.go\n+++ b/foo.go\n@@ -1 +1 @@\n+package foo\n"
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -947,7 +947,7 @@ func TestBuildRichValidatorContext_SkipsDeletedFiles(t *testing.T) {
 	workDir := t.TempDir()
 
 	diff := "diff --git a/deleted.go b/deleted.go\n--- a/deleted.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-package old\n"
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -971,7 +971,7 @@ func TestBuildRichValidatorContext_SkipsMissingCLAUDEMD(t *testing.T) {
 	clusterID := "test-cluster"
 	workDir := t.TempDir()
 
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",
@@ -1003,7 +1003,7 @@ func TestBuildRichValidatorContext_TruncatesLargeFiles(t *testing.T) {
 	}
 
 	diff := "diff --git a/large.go b/large.go\n--- a/large.go\n+++ b/large.go\n@@ -1 +1 @@\n+x\n"
-	b.Publish(bus.Message{
+	_ = b.Publish(bus.Message{
 		ClusterID: clusterID,
 		Topic:     bus.TopicImplementationReady,
 		Sender:    "worker",

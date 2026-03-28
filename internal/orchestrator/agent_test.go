@@ -69,7 +69,7 @@ func newTestBus(t *testing.T) *bus.Bus {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS messages (
 		id TEXT PRIMARY KEY,
@@ -294,7 +294,9 @@ func TestExecuteOnce_ShellAgent_RunsInWorkDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	markerPath := filepath.Join(tmpDir, "marker.txt")
-	os.WriteFile(markerPath, []byte("found"), 0644)
+	if err := os.WriteFile(markerPath, []byte("found"), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	cfg := AgentConfig{
 		ID:            "validator-check",

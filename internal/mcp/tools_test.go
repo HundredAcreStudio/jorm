@@ -24,14 +24,14 @@ func writeLogLines(t *testing.T, dir, runID string, entries []struct {
 	if err != nil {
 		t.Fatalf("create log file: %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	for _, e := range entries {
 		line, _ := json.Marshal(map[string]any{
 			"time":  e.ts.UTC().Format(time.RFC3339Nano),
 			"level": "INFO",
 			"msg":   e.msg,
 		})
-		f.WriteString(string(line) + "\n")
+		_, _ = f.WriteString(string(line) + "\n")
 	}
 	return path
 }
@@ -82,7 +82,7 @@ func TestListRuns_IncludesElapsed(t *testing.T) {
 	var result struct {
 		Runs []map[string]any `json:"runs"`
 	}
-	json.Unmarshal([]byte(out), &result)
+	_ = json.Unmarshal([]byte(out), &result)
 	if len(result.Runs) == 0 {
 		t.Fatal("expected at least one run")
 	}
@@ -107,7 +107,7 @@ func TestListRuns_CostFromClusterComplete(t *testing.T) {
 	var result struct {
 		Runs []map[string]any `json:"runs"`
 	}
-	json.Unmarshal([]byte(out), &result)
+	_ = json.Unmarshal([]byte(out), &result)
 	if len(result.Runs) == 0 {
 		t.Fatal("expected at least one run")
 	}
@@ -193,7 +193,7 @@ func TestGetMessages_RespectsLimit(t *testing.T) {
 	}
 
 	var msgs []map[string]any
-	json.Unmarshal([]byte(out), &msgs)
+	_ = json.Unmarshal([]byte(out), &msgs)
 	if len(msgs) != 4 {
 		t.Errorf("expected 4 messages with limit=4, got %d", len(msgs))
 	}
@@ -213,7 +213,7 @@ func TestGetMessages_FiltersBySender(t *testing.T) {
 	}
 
 	var msgs []map[string]any
-	json.Unmarshal([]byte(out), &msgs)
+	_ = json.Unmarshal([]byte(out), &msgs)
 	if len(msgs) != 1 || msgs[0]["sender"] != "validator-pr" {
 		t.Errorf("expected 1 message from validator-pr, got %d", len(msgs))
 	}

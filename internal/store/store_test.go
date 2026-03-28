@@ -13,7 +13,7 @@ func newTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
@@ -56,10 +56,10 @@ func TestSave_Upsert(t *testing.T) {
 		Branch:  "b",
 		Status:  "running",
 	}
-	s.Save(r)
+	_ = s.Save(r)
 
 	r.Status = "accepted"
-	s.Save(r)
+	_ = s.Save(r)
 
 	loaded, _ := s.Load("run-1")
 	if loaded.Status != "accepted" {
@@ -69,8 +69,8 @@ func TestSave_Upsert(t *testing.T) {
 
 func TestLoadByIssue_ReturnsMostRecent(t *testing.T) {
 	s := newTestStore(t)
-	s.Save(&RunState{ID: "42-1", IssueID: "42", Branch: "b", Status: "rejected"})
-	s.Save(&RunState{ID: "42-2", IssueID: "42", Branch: "b", Status: "running"})
+	_ = s.Save(&RunState{ID: "42-1", IssueID: "42", Branch: "b", Status: "rejected"})
+	_ = s.Save(&RunState{ID: "42-2", IssueID: "42", Branch: "b", Status: "running"})
 
 	loaded, err := s.LoadByIssue("42")
 	if err != nil {
@@ -91,10 +91,10 @@ func TestLoad_NotFound(t *testing.T) {
 
 func TestDelete_RemovesRunAndMessages(t *testing.T) {
 	s := newTestStore(t)
-	s.Save(&RunState{ID: "run-1", IssueID: "42", Branch: "b", Status: "running"})
+	_ = s.Save(&RunState{ID: "run-1", IssueID: "42", Branch: "b", Status: "running"})
 
 	// Insert a message for this run
-	s.db.Exec(`INSERT INTO messages (id, cluster_id, topic, sender, content, data) VALUES ('m1', 'run-1', 'TEST', 'test', 'hello', '{}')`)
+	_, _ = s.db.Exec(`INSERT INTO messages (id, cluster_id, topic, sender, content, data) VALUES ('m1', 'run-1', 'TEST', 'test', 'hello', '{}')`)
 
 	if err := s.Delete("run-1"); err != nil {
 		t.Fatalf("Delete: %v", err)
@@ -106,7 +106,7 @@ func TestDelete_RemovesRunAndMessages(t *testing.T) {
 	}
 
 	var count int
-	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE cluster_id = 'run-1'`).Scan(&count)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE cluster_id = 'run-1'`).Scan(&count)
 	if count != 0 {
 		t.Errorf("expected 0 messages after delete, got %d", count)
 	}
@@ -114,8 +114,8 @@ func TestDelete_RemovesRunAndMessages(t *testing.T) {
 
 func TestList_ReturnsAllRuns(t *testing.T) {
 	s := newTestStore(t)
-	s.Save(&RunState{ID: "1-1", IssueID: "1", Branch: "b", Status: "accepted"})
-	s.Save(&RunState{ID: "2-1", IssueID: "2", Branch: "b", Status: "running"})
+	_ = s.Save(&RunState{ID: "1-1", IssueID: "1", Branch: "b", Status: "accepted"})
+	_ = s.Save(&RunState{ID: "2-1", IssueID: "2", Branch: "b", Status: "running"})
 
 	runs, err := s.List()
 	if err != nil {
@@ -128,9 +128,9 @@ func TestList_ReturnsAllRuns(t *testing.T) {
 
 func TestCountRunsForIssue(t *testing.T) {
 	s := newTestStore(t)
-	s.Save(&RunState{ID: "42-1", IssueID: "42", Branch: "b", Status: "rejected"})
-	s.Save(&RunState{ID: "42-2", IssueID: "42", Branch: "b", Status: "running"})
-	s.Save(&RunState{ID: "99-1", IssueID: "99", Branch: "b", Status: "running"})
+	_ = s.Save(&RunState{ID: "42-1", IssueID: "42", Branch: "b", Status: "rejected"})
+	_ = s.Save(&RunState{ID: "42-2", IssueID: "42", Branch: "b", Status: "running"})
+	_ = s.Save(&RunState{ID: "99-1", IssueID: "99", Branch: "b", Status: "running"})
 
 	count, err := s.CountRunsForIssue("42")
 	if err != nil {
@@ -143,7 +143,7 @@ func TestCountRunsForIssue(t *testing.T) {
 
 func TestSave_InPlace(t *testing.T) {
 	s := newTestStore(t)
-	s.Save(&RunState{ID: "run-1", IssueID: "42", Branch: "main", Status: "running", InPlace: true})
+	_ = s.Save(&RunState{ID: "run-1", IssueID: "42", Branch: "main", Status: "running", InPlace: true})
 
 	loaded, _ := s.Load("run-1")
 	if !loaded.InPlace {

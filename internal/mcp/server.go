@@ -36,7 +36,7 @@ func (s *Server) Run() error {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			out, err := listRuns(db)
 			if err != nil {
@@ -62,7 +62,7 @@ func (s *Server) Run() error {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			out, err := getStatus(db, runID)
 			if err != nil {
@@ -129,7 +129,7 @@ func (s *Server) Run() error {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			out, err := getMessages(db, runID, topic, sender, limit)
 			if err != nil {
@@ -155,7 +155,7 @@ func (s *Server) Run() error {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			out, err := inspect(db, runID)
 			if err != nil {

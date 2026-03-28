@@ -61,7 +61,7 @@ func (p *GitHubProvider) fetchWithAPI(ctx context.Context, id string) (*Issue, e
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

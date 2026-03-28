@@ -14,7 +14,7 @@ func newTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 
 	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS messages (
 		id TEXT PRIMARY KEY,
@@ -60,8 +60,8 @@ func TestPublish_AssignsIDAndTimestamp(t *testing.T) {
 
 func TestQuery_FiltersByTopic(t *testing.T) {
 	b := New(newTestDB(t))
-	b.Publish(Message{ClusterID: "c1", Topic: "A", Sender: "s", Content: "a"})
-	b.Publish(Message{ClusterID: "c1", Topic: "B", Sender: "s", Content: "b"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "A", Sender: "s", Content: "a"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "B", Sender: "s", Content: "b"})
 
 	msgs, err := b.Query("c1", QueryOpts{Topics: []string{"A"}})
 	if err != nil {
@@ -74,8 +74,8 @@ func TestQuery_FiltersByTopic(t *testing.T) {
 
 func TestQuery_FiltersBySender(t *testing.T) {
 	b := New(newTestDB(t))
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "alice", Content: "a"})
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "bob", Content: "b"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "alice", Content: "a"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "bob", Content: "b"})
 
 	msgs, err := b.Query("c1", QueryOpts{Sender: "alice"})
 	if err != nil {
@@ -88,9 +88,9 @@ func TestQuery_FiltersBySender(t *testing.T) {
 
 func TestQuery_Limit(t *testing.T) {
 	b := New(newTestDB(t))
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "1"})
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "2"})
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "3"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "1"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "2"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "3"})
 
 	msgs, err := b.Query("c1", QueryOpts{Limit: 2})
 	if err != nil {
@@ -103,8 +103,8 @@ func TestQuery_Limit(t *testing.T) {
 
 func TestQuery_IsolatesByCluster(t *testing.T) {
 	b := New(newTestDB(t))
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "c1"})
-	b.Publish(Message{ClusterID: "c2", Topic: "T", Sender: "s", Content: "c2"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "c1"})
+	_ = b.Publish(Message{ClusterID: "c2", Topic: "T", Sender: "s", Content: "c2"})
 
 	msgs, err := b.Query("c1", QueryOpts{})
 	if err != nil {
@@ -117,8 +117,8 @@ func TestQuery_IsolatesByCluster(t *testing.T) {
 
 func TestFindLast_ReturnsMostRecent(t *testing.T) {
 	b := New(newTestDB(t))
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "first", Timestamp: time.Now().Add(-time.Second)})
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "second", Timestamp: time.Now()})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "first", Timestamp: time.Now().Add(-time.Second)})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "second", Timestamp: time.Now()})
 
 	msg, err := b.FindLast("c1", "T")
 	if err != nil {
@@ -139,7 +139,7 @@ func TestFindLast_ReturnsErrorWhenEmpty(t *testing.T) {
 
 func TestPublish_DataRoundTrips(t *testing.T) {
 	b := New(newTestDB(t))
-	b.Publish(Message{
+	_ = b.Publish(Message{
 		ClusterID: "c1",
 		Topic:     "T",
 		Sender:    "s",
@@ -160,7 +160,7 @@ func TestSubscribe_ReceivesPublishedMessages(t *testing.T) {
 	b := New(newTestDB(t))
 	ch := b.Subscribe("T")
 
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "hello"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "hello"})
 
 	select {
 	case msg := <-ch:
@@ -177,7 +177,7 @@ func TestUnsubscribe_StopsDelivery(t *testing.T) {
 	ch := b.Subscribe("T")
 	b.Unsubscribe("T", ch)
 
-	b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "hello"})
+	_ = b.Publish(Message{ClusterID: "c1", Topic: "T", Sender: "s", Content: "hello"})
 
 	select {
 	case <-ch:

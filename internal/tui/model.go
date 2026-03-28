@@ -16,10 +16,9 @@ type validatorState struct {
 }
 
 type agentInfo struct {
-	id        string
-	name      string
-	state     string
-	iteration int
+	id    string
+	name  string
+	state string
 }
 
 type model struct {

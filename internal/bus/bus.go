@@ -159,7 +159,7 @@ func (b *Bus) Query(clusterID string, opts QueryOpts) ([]Message, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	return scanMessages(rows)
 }
@@ -189,7 +189,7 @@ func scanMessages(rows *sql.Rows) ([]Message, error) {
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
 		msg.Data = make(map[string]any)
-		json.Unmarshal([]byte(dataJSON), &msg.Data)
+		_ = json.Unmarshal([]byte(dataJSON), &msg.Data)
 		msgs = append(msgs, msg)
 	}
 	return msgs, rows.Err()
@@ -202,6 +202,6 @@ func scanMessage(row *sql.Row) (*Message, error) {
 		return nil, fmt.Errorf("scanning message: %w", err)
 	}
 	msg.Data = make(map[string]any)
-	json.Unmarshal([]byte(dataJSON), &msg.Data)
+	_ = json.Unmarshal([]byte(dataJSON), &msg.Data)
 	return &msg, nil
 }

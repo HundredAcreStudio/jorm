@@ -66,7 +66,7 @@ func (p *JiraProvider) Fetch(ctx context.Context, id string) (*Issue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching jira issue %s: %w", id, err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)

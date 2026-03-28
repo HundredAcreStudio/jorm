@@ -49,7 +49,7 @@ func QueryRuns(db *sql.DB) ([]RunRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("querying runs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var result []RunRow
 	for rows.Next() {
@@ -101,7 +101,7 @@ func QueryMessages(db *sql.DB, runID, topic, sender string, limit int) ([]Messag
 	if err != nil {
 		return nil, fmt.Errorf("querying messages: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var msgs []MessageRow
 	for rows.Next() {
@@ -111,7 +111,7 @@ func QueryMessages(db *sql.DB, runID, topic, sender string, limit int) ([]Messag
 			return nil, fmt.Errorf("scanning message: %w", err)
 		}
 		m.Data = make(map[string]any)
-		json.Unmarshal([]byte(dataJSON), &m.Data)
+		_ = json.Unmarshal([]byte(dataJSON), &m.Data)
 		msgs = append(msgs, m)
 	}
 	if msgs == nil {
@@ -132,6 +132,6 @@ func QueryLastMessage(db *sql.DB, runID, topic string) (*MessageRow, error) {
 		return nil, fmt.Errorf("querying last message for %s/%s: %w", runID, topic, err)
 	}
 	m.Data = make(map[string]any)
-	json.Unmarshal([]byte(dataJSON), &m.Data)
+	_ = json.Unmarshal([]byte(dataJSON), &m.Data)
 	return &m, nil
 }

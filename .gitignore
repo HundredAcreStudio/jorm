@@ -30,3 +30,5 @@ Thumbs.db
 *.db
 *.db-journal
 *.db-wal
+
+.jorm/logs

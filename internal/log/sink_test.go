@@ -91,7 +91,7 @@ func newTempLogger(t *testing.T) *Logger {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { f.Close() })
+	t.Cleanup(func() { _ = f.Close() })
 	handler := slog.NewJSONHandler(f, &slog.HandlerOptions{Level: slog.LevelDebug})
 	return &Logger{logger: slog.New(handler), file: f}
 }
