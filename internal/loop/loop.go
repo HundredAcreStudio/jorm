@@ -37,7 +37,7 @@ type Options struct {
 }
 
 // Run orchestrates the full jorm lifecycle.
-func Run(ctx context.Context, opts Options) error {
+func Run(ctx context.Context, opts Options) (retErr error) {
 	// Flag implications: --ship implies --pr implies --worktree
 	if opts.Ship {
 		opts.PR = true
@@ -50,6 +50,11 @@ func Run(ctx context.Context, opts Options) error {
 	if sink == nil {
 		sink = &events.PrintSink{}
 	}
+
+	// Deferred here (before config/store) so LoopDone fires on ALL return paths,
+	// including early failures. The closure captures sink by reference, so it
+	// uses the final value (possibly wrapped by SinkFactory + LogSink).
+	defer func() { sink.LoopDone(retErr) }()
 
 	cfg, err := config.Load(opts.ConfigPath)
 	if err != nil {

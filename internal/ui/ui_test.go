@@ -404,13 +404,13 @@ func TestUILoopDoneSuccess(t *testing.T) {
 
 	u.LoopDone(nil)
 	output := buf.String()
-	if !strings.Contains(output, "Cluster test-run completed in") {
-		t.Errorf("expected completion message, got %q", output)
+	if !strings.Contains(output, "COMPLETED") {
+		t.Errorf("expected COMPLETED message, got %q", output)
 	}
-	if !strings.Contains(output, "5 agents") {
-		t.Errorf("expected agent count, got %q", output)
+	if !strings.Contains(output, "Run:    test-run") {
+		t.Errorf("expected run ID, got %q", output)
 	}
-	if !strings.Contains(output, "3 rounds") {
-		t.Errorf("expected round count, got %q", output)
+	if !strings.Contains(output, "$8.23") {
+		t.Errorf("expected cost, got %q", output)
 	}
 }

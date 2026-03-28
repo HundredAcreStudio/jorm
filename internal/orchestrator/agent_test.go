@@ -17,10 +17,23 @@ import (
 
 // fakeSink implements events.Sink for testing.
 type fakeSink struct {
-	mu               sync.Mutex
-	validatorStarts  []string
-	validatorResults []agent.ValidatorResult
-	outputs          []string
+	mu                 sync.Mutex
+	validatorStarts    []string
+	validatorResults   []agent.ValidatorResult
+	outputs            []string
+	stagesFailed       []stageFailedRecord
+	stageRoundsStarted []stageRoundRecord
+}
+
+type stageFailedRecord struct {
+	index int
+	name  string
+	err   error
+}
+
+type stageRoundRecord struct {
+	index int
+	round int
 }
 
 func (s *fakeSink) Phase(string)                            {}
@@ -44,6 +57,18 @@ func (s *fakeSink) SystemEvent(string)                               {}
 func (s *fakeSink) ClusterComplete(string, string)                   {}
 func (s *fakeSink) StageStarted(int, string)                         {}
 func (s *fakeSink) StageCompleted(int, string)                       {}
+
+func (s *fakeSink) StageFailed(index int, name string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stagesFailed = append(s.stagesFailed, stageFailedRecord{index: index, name: name, err: err})
+}
+
+func (s *fakeSink) StageRoundStarted(index int, round int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stageRoundsStarted = append(s.stageRoundsStarted, stageRoundRecord{index: index, round: round})
+}
 
 func (s *fakeSink) ClaudeOutput(text string) {
 	s.mu.Lock()

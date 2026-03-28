@@ -46,3 +46,5 @@ func (s *ProgramSink) SystemEvent(text string)                                  
 func (s *ProgramSink) ClusterComplete(runID, reason string)                          {}
 func (s *ProgramSink) StageStarted(stageIndex int, stageName string)                 {}
 func (s *ProgramSink) StageCompleted(stageIndex int, stageName string)               {}
+func (s *ProgramSink) StageFailed(stageIndex int, stageName string, err error)       {}
+func (s *ProgramSink) StageRoundStarted(stageIndex int, round int)                   {}

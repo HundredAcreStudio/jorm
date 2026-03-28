@@ -582,3 +582,127 @@ func TestStageOrchestrator_CleanupStage_RunsWorkerWhenNotesExist(t *testing.T) {
 		t.Error("expected CLUSTER_COMPLETE after cleanup stage with notes")
 	}
 }
+
+// newTestStageOrchestratorWithSink is a test helper that creates a StageOrchestrator and
+// returns both the orchestrator and the recording fakeSink for assertion.
+func newTestStageOrchestratorWithSink(t *testing.T, b *bus.Bus, stages []Stage) (*StageOrchestrator, *fakeSink) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	wt := &gitpkg.Worktree{Dir: tmpDir, RepoDir: tmpDir}
+	sink := &fakeSink{}
+
+	workerCfg := AgentConfig{
+		ID:            "worker",
+		Name:          "Worker",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "true",
+	}
+	testerCfg := AgentConfig{
+		ID:            "tester",
+		Name:          "Tester",
+		Role:          "worker",
+		ExecutionMode: "shell",
+		Command:       "true",
+	}
+
+	so := NewStageOrchestrator(b, &config.Config{}, wt, sink, nil,
+		"test-cluster", workerCfg, testerCfg, stages)
+	return so, sink
+}
+
+// TestStageOrchestrator_StageFailed_EmittedOnError verifies that sink.StageFailed is called
+// when a stage returns an error. Covers AC8.
+//
+// This test will FAIL (runtime) until stages.go calls so.sink.StageFailed before returning
+// the stage error in Run().
+func TestStageOrchestrator_StageFailed_EmittedOnError(t *testing.T) {
+	b := newTestBus(t)
+
+	// A review stage that always rejects with MaxRetries=1 exhausts retries → returns error.
+	failingStages := []Stage{
+		{
+			Name:       "always-reject",
+			Kind:       StageKindReview,
+			MaxRetries: 1, // exhausts retries immediately → returns error
+			ReviewerConfig: &AgentConfig{
+				ID:            "strict-reviewer",
+				Name:          "Strict Reviewer",
+				Role:          "validator",
+				ExecutionMode: "shell",
+				Command:       "exit 1", // always rejects
+			},
+		},
+	}
+
+	so, sink := newTestStageOrchestratorWithSink(t, b, failingStages)
+
+	err := so.Run(context.Background(), testIssue())
+	if err == nil {
+		t.Fatal("expected error from exhausted review stage, got nil")
+	}
+
+	sink.mu.Lock()
+	failed := sink.stagesFailed
+	sink.mu.Unlock()
+
+	if len(failed) == 0 {
+		t.Error("expected sink.StageFailed to be called when stage fails, but it was not called")
+	}
+	if len(failed) > 0 && failed[0].name != "always-reject" {
+		t.Errorf("expected StageFailed with stage name %q, got %q", "always-reject", failed[0].name)
+	}
+}
+
+// TestStageOrchestrator_StageRoundStarted_EmittedPerReviewRound verifies that
+// sink.StageRoundStarted is called once per attempt in a review stage retry loop.
+// Covers AC9.
+//
+// This test will FAIL (runtime) until stages.go calls so.sink.StageRoundStarted at the top
+// of each runReviewStage loop iteration.
+func TestStageOrchestrator_StageRoundStarted_EmittedPerReviewRound(t *testing.T) {
+	b := newTestBus(t)
+
+	sentinelFile := t.TempDir() + "/sentinel"
+	// First call: create sentinel + reject. Second call: sentinel exists → approve.
+	reviewerCmd := fmt.Sprintf(`test -f "%s" && exit 0; touch "%s"; exit 1`, sentinelFile, sentinelFile)
+
+	stages := []Stage{
+		{
+			Name:       "two-round-review",
+			Kind:       StageKindReview,
+			MaxRetries: 5,
+			ReviewerConfig: &AgentConfig{
+				ID:            "reviewer",
+				Name:          "Reviewer",
+				Role:          "validator",
+				ExecutionMode: "shell",
+				Command:       reviewerCmd,
+			},
+		},
+	}
+
+	so, sink := newTestStageOrchestratorWithSink(t, b, stages)
+
+	err := so.Run(context.Background(), testIssue())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	sink.mu.Lock()
+	rounds := sink.stageRoundsStarted
+	sink.mu.Unlock()
+
+	// The reviewer ran twice (reject then approve), so StageRoundStarted should be called twice
+	if len(rounds) < 2 {
+		t.Errorf("expected StageRoundStarted to be called at least 2 times (one per review round), got %d", len(rounds))
+	}
+	for i, r := range rounds {
+		if r.index != 0 {
+			t.Errorf("round[%d]: expected stage index 0, got %d", i, r.index)
+		}
+		if r.round != i+1 {
+			t.Errorf("round[%d]: expected round number %d, got %d", i, i+1, r.round)
+		}
+	}
+}

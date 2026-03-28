@@ -84,6 +84,7 @@ func (so *StageOrchestrator) Run(ctx context.Context, iss *issue.Issue) error {
 			err = fmt.Errorf("unknown stage kind %q", stage.Kind)
 		}
 		if err != nil {
+			so.sink.StageFailed(i, stage.Name, err)
 			return fmt.Errorf("stage %q: %w", stage.Name, err)
 		}
 
@@ -131,6 +132,7 @@ func (so *StageOrchestrator) runAgentStage(ctx context.Context, stage Stage) err
 // runReviewStage implements the inner retry loop: reviewer → worker fix → tester cycle.
 func (so *StageOrchestrator) runReviewStage(ctx context.Context, stageIdx int, stage Stage) error {
 	for attempt := 0; stage.MaxRetries == 0 || attempt < stage.MaxRetries; attempt++ {
+		so.sink.StageRoundStarted(stageIdx, attempt+1)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

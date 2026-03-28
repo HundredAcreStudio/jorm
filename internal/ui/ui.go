@@ -10,7 +10,18 @@ import (
 	"time"
 
 	"github.com/jorm/internal/agent"
+	jormerrors "github.com/jorm/internal/errors"
 )
+
+// stageRecord tracks timing and status for a single pipeline stage.
+type stageRecord struct {
+	name      string
+	startTime time.Time
+	endTime   time.Time
+	rounds    int
+	failed    bool
+	err       error
+}
 
 // UI implements events.Sink with zeroshot-style scrolling log + persistent ANSI footer.
 type UI struct {
@@ -28,6 +39,10 @@ type UI struct {
 	totalAgents     int
 	totalCost   float64
 	cancel      context.CancelFunc
+
+	stageRecords []stageRecord
+	issueTitle   string
+	issueURL     string
 }
 
 // New creates a new UI. It writes to os.Stdout.
@@ -136,6 +151,11 @@ func (u *UI) Phase(name string) {
 }
 
 func (u *UI) IssueLoaded(title, url string) {
+	u.mu.Lock()
+	u.issueTitle = title
+	u.issueURL = url
+	u.mu.Unlock()
+
 	u.printLine(u.formatter.FormatSeparator("", u.termWidth))
 	u.printAgentLine("system", fmt.Sprintf("%s 📋 %s", u.timestamp(), colorBold.Sprint("NEW TASK")))
 	u.printAgentLine("system", colorBold.Sprintf("# %s", title))
@@ -232,16 +252,95 @@ func (u *UI) LoopDone(err error) {
 	termHeight := u.termHeight
 	footerLines := u.lastFooterLines
 	_, _ = fmt.Fprint(u.w, u.footer.Clear(termHeight, footerLines))
+	records := make([]stageRecord, len(u.stageRecords))
+	copy(records, u.stageRecords)
+	issueTitle := u.issueTitle
+	issueURL := u.issueURL
 	u.mu.Unlock()
 
+	elapsed := time.Since(u.startTime).Truncate(time.Second)
+
 	if err != nil {
-		u.printLine(colorFailure.Sprintf("✗ Cluster %s failed: %s", u.runID, err))
+		// Find the failed stage name
+		failedStage := ""
+		for _, r := range records {
+			if r.failed {
+				failedStage = r.name
+				break
+			}
+		}
+
+		if failedStage != "" {
+			u.printAgentLine(u.runID, fmt.Sprintf("%s %s", u.timestamp(), colorFailure.Sprintf("❌ FAILED at stage %q", failedStage)))
+		} else {
+			u.printAgentLine(u.runID, fmt.Sprintf("%s %s", u.timestamp(), colorFailure.Sprint("❌ FAILED")))
+		}
 	} else {
-		elapsed := time.Since(u.startTime).Truncate(time.Second)
-		u.printLine(colorSuccess.Sprintf("✓ Cluster %s completed in %s", u.runID, elapsed) +
-			colorDim.Sprintf(" │ %d agents │ %d rounds │ ", u.totalAgents, u.round) +
-			colorFooterCost.Sprintf("$%.2f", u.totalCost))
+		u.printAgentLine(u.runID, fmt.Sprintf("%s %s", u.timestamp(), colorSuccess.Sprint("🎉 COMPLETED")))
 	}
+
+	u.printLine("")
+	u.printLine(u.formatter.FormatDoubleSeparator("", u.termWidth))
+	u.printLine("")
+
+	// Print stage summary if we have any
+	if len(records) > 0 {
+		u.printLine("Stage summary:")
+		for _, r := range records {
+			duration := ""
+			if !r.endTime.IsZero() {
+				duration = r.endTime.Sub(r.startTime).Truncate(time.Second).String()
+			}
+			roundInfo := ""
+			if r.rounds > 1 {
+				roundInfo = fmt.Sprintf(", %d rounds", r.rounds)
+			}
+			if r.failed {
+				ce := jormerrors.ClassifyError(r.err)
+				detail := ""
+				if ce != nil {
+					detail = ce.Msg
+				}
+				if detail != "" {
+					u.printLine(fmt.Sprintf("  %s %-25s — %s", colorFailure.Sprint("✗"), r.name, detail))
+				} else {
+					u.printLine(fmt.Sprintf("  %s %-25s", colorFailure.Sprint("✗"), r.name))
+				}
+			} else if !r.endTime.IsZero() {
+				u.printLine(fmt.Sprintf("  %s %-25s (%s%s)", colorSuccess.Sprint("✓"), r.name, duration, roundInfo))
+			} else {
+				u.printLine(fmt.Sprintf("  %s %-25s", colorDim.Sprint("○"), r.name))
+			}
+		}
+		u.printLine("")
+	}
+
+	// Print metadata
+	if issueTitle != "" {
+		if issueURL != "" {
+			u.printLine(fmt.Sprintf("Issue:  %s (%s)", issueTitle, issueURL))
+		} else {
+			u.printLine(fmt.Sprintf("Issue:  %s", issueTitle))
+		}
+	}
+	u.printLine(fmt.Sprintf("Run:    %s", u.runID))
+	u.printLine(fmt.Sprintf("Time:   %s", elapsed))
+	if u.totalCost > 0 {
+		u.printLine(fmt.Sprintf("Cost:   $%.2f", u.totalCost))
+	}
+
+	if err != nil {
+		ce := jormerrors.ClassifyError(err)
+		if ce != nil {
+			u.printLine(fmt.Sprintf("Error:  %s", ce.Msg))
+			if ce.Hint != "" {
+				u.printLine(fmt.Sprintf("Tip:    %s", ce.Hint))
+			}
+		} else {
+			u.printLine(fmt.Sprintf("Error:  %s", err))
+		}
+	}
+	u.printLine("")
 }
 
 // --- Lifecycle event methods ---
@@ -325,5 +424,37 @@ func (u *UI) ClusterComplete(runID, reason string) {
 	u.printLine("")
 }
 
-func (u *UI) StageStarted(stageIndex int, stageName string)   {}
-func (u *UI) StageCompleted(stageIndex int, stageName string) {}
+func (u *UI) StageStarted(stageIndex int, stageName string) {
+	u.mu.Lock()
+	u.stageRecords = append(u.stageRecords, stageRecord{
+		name:      stageName,
+		startTime: time.Now(),
+	})
+	u.mu.Unlock()
+}
+
+func (u *UI) StageCompleted(stageIndex int, stageName string) {
+	u.mu.Lock()
+	if stageIndex < len(u.stageRecords) {
+		u.stageRecords[stageIndex].endTime = time.Now()
+	}
+	u.mu.Unlock()
+}
+
+func (u *UI) StageFailed(stageIndex int, stageName string, err error) {
+	u.mu.Lock()
+	if stageIndex < len(u.stageRecords) {
+		u.stageRecords[stageIndex].endTime = time.Now()
+		u.stageRecords[stageIndex].failed = true
+		u.stageRecords[stageIndex].err = err
+	}
+	u.mu.Unlock()
+}
+
+func (u *UI) StageRoundStarted(stageIndex int, round int) {
+	u.mu.Lock()
+	if stageIndex < len(u.stageRecords) {
+		u.stageRecords[stageIndex].rounds = round
+	}
+	u.mu.Unlock()
+}

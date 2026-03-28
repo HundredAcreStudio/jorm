@@ -48,8 +48,9 @@ func Run(ctx context.Context, opts loop.Options) error {
 	opts.Sink = sink
 
 	go func() {
-		err := loop.Run(ctx, opts)
-		p.Send(LoopDoneMsg{Err: err})
+		// loop.Run defers sink.LoopDone before any fallible work,
+		// so ProgramSink.LoopDone (→ LoopDoneMsg) fires on all paths.
+		_ = loop.Run(ctx, opts)
 	}()
 
 	finalModel, err := p.Run()

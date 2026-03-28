@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	jormerrors "github.com/jorm/internal/errors"
 )
 
 // ClaudeResult holds the output from a Claude CLI invocation.
@@ -143,7 +145,8 @@ func RunClaude(ctx context.Context, opts RunOptions) (*ClaudeResult, error) {
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("claude exited with error: %w\nstderr: %s", err, stderr.String())
+		raw := fmt.Errorf("claude exited with error: %w\nstderr: %s", err, stderr.String())
+		return nil, jormerrors.ClassifyError(raw)
 	}
 
 	return &ClaudeResult{

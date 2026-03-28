@@ -153,3 +153,13 @@ func (l *LogSink) StageCompleted(stageIndex int, stageName string) {
 	l.logger.Info("stage.completed", "stage_index", stageIndex, "stage", stageName)
 	l.inner.StageCompleted(stageIndex, stageName)
 }
+
+func (l *LogSink) StageFailed(stageIndex int, stageName string, err error) {
+	l.logger.Error("stage.failed", "stage_index", stageIndex, "stage", stageName, "error", err)
+	l.inner.StageFailed(stageIndex, stageName, err)
+}
+
+func (l *LogSink) StageRoundStarted(stageIndex int, round int) {
+	l.logger.Info("stage.round_started", "stage_index", stageIndex, "round", round)
+	l.inner.StageRoundStarted(stageIndex, round)
+}

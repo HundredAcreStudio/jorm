@@ -33,6 +33,17 @@ var (
 	buildDate = "unknown"
 )
 
+// runLoop executes loop.Run and translates errors for CLI output.
+// loop.Run defers sink.LoopDone which prints the run summary, so we
+// only need to print the error line here for non-TUI mode.
+func runLoop(ctx context.Context, opts loop.Options) error {
+	if err := loop.Run(ctx, opts); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		os.Exit(1)
+	}
+	return nil
+}
+
 func main() {
 	var (
 		configPath string
@@ -65,6 +76,7 @@ func main() {
 		Short: "Run the dev loop for an issue ID, markdown file, or freeform prompt",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cmd.SilenceUsage = true
 			arg := args[0]
 			opts := loop.Options{
 				ConfigPath: configPath,
@@ -96,14 +108,12 @@ func main() {
 				opts.Body = arg
 			}
 
-			if noTUI {
-				return loop.Run(context.Background(), opts)
+			if !noTUI {
+				opts.SinkFactory = func(runID string, agentCount int) events.Sink {
+					return ui.New(runID, agentCount)
+				}
 			}
-			// Use new zeroshot-style scrolling UI
-			opts.SinkFactory = func(runID string, agentCount int) events.Sink {
-				return ui.New(runID, agentCount)
-			}
-			return loop.Run(context.Background(), opts)
+			return runLoop(context.Background(), opts)
 		},
 	}
 	runCmd.Flags().BoolVar(&worktreeFlag, "worktree", false, "create git worktree for isolation")
@@ -118,7 +128,8 @@ func main() {
 		Short: "Resume a previous run for an issue",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return loop.Run(context.Background(), loop.Options{
+			cmd.SilenceUsage = true
+			return runLoop(context.Background(), loop.Options{
 				ConfigPath: configPath,
 				RepoDir:    repoDir,
 				Profile:    profile,

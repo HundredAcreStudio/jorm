@@ -2,6 +2,7 @@ package log
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -31,8 +32,10 @@ type mockSink struct {
 	roundStarts       []int
 	roundCompletes    [][3]int
 	retryRoundStarts  []int
-	systemEvents      []string
-	clusterCompletes  [][2]string
+	systemEvents       []string
+	clusterCompletes   [][2]string
+	stagesFailed       [][2]string
+	stageRoundsStarted [][2]int
 }
 
 func (m *mockSink) Phase(name string)             { m.phases = append(m.phases, name) }
@@ -83,6 +86,12 @@ func (m *mockSink) ClusterComplete(runID, reason string) {
 }
 func (m *mockSink) StageStarted(stageIndex int, stageName string)   {}
 func (m *mockSink) StageCompleted(stageIndex int, stageName string) {}
+func (m *mockSink) StageFailed(stageIndex int, stageName string, err error) {
+	m.stagesFailed = append(m.stagesFailed, [2]string{stageName, fmt.Sprintf("%v", err)})
+}
+func (m *mockSink) StageRoundStarted(stageIndex int, round int) {
+	m.stageRoundsStarted = append(m.stageRoundsStarted, [2]int{stageIndex, round})
+}
 
 // newTempLogger creates a Logger backed by a temp file for tests.
 func newTempLogger(t *testing.T) *Logger {
@@ -209,6 +218,48 @@ func TestLogSinkDelegates(t *testing.T) {
 	}
 	if len(inner.clusterCompletes) != 1 || inner.clusterCompletes[0][0] != "run-42" {
 		t.Errorf("ClusterComplete not delegated correctly: %v", inner.clusterCompletes)
+	}
+}
+
+// TestLogSink_StageFailed_Delegated verifies LogSink.StageFailed logs and delegates to inner.
+// Covers AC13 (StageFailed in log/sink.go).
+//
+// This test will not compile until StageFailed is added to the Sink interface and LogSink.
+func TestLogSink_StageFailed_Delegated(t *testing.T) {
+	logger := newTempLogger(t)
+	inner := &mockSink{}
+	ls := NewLogSink(inner, logger)
+
+	testErr := errors.New("rate limit reached")
+	ls.StageFailed(2, "PR Review", testErr)
+
+	if len(inner.stagesFailed) != 1 {
+		t.Fatalf("expected 1 StageFailed delegation, got %d", len(inner.stagesFailed))
+	}
+	if inner.stagesFailed[0][0] != "PR Review" {
+		t.Errorf("expected stage name %q, got %q", "PR Review", inner.stagesFailed[0][0])
+	}
+	if inner.stagesFailed[0][1] != testErr.Error() {
+		t.Errorf("expected err %q, got %q", testErr.Error(), inner.stagesFailed[0][1])
+	}
+}
+
+// TestLogSink_StageRoundStarted_Delegated verifies LogSink.StageRoundStarted logs and delegates.
+// Covers AC13 (StageRoundStarted in log/sink.go).
+//
+// This test will not compile until StageRoundStarted is added to the Sink interface and LogSink.
+func TestLogSink_StageRoundStarted_Delegated(t *testing.T) {
+	logger := newTempLogger(t)
+	inner := &mockSink{}
+	ls := NewLogSink(inner, logger)
+
+	ls.StageRoundStarted(1, 3)
+
+	if len(inner.stageRoundsStarted) != 1 {
+		t.Fatalf("expected 1 StageRoundStarted delegation, got %d", len(inner.stageRoundsStarted))
+	}
+	if inner.stageRoundsStarted[0] != [2]int{1, 3} {
+		t.Errorf("expected [1, 3], got %v", inner.stageRoundsStarted[0])
 	}
 }
 
